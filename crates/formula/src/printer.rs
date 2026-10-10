@@ -1,13 +1,27 @@
-//! [`Expr`] → formula text (without `=`), A1 or R1C1.
+//! [`Expr`] → formula text (without `=`), A1 or R1C1, in the canonical dialect or a local one.
+//!
+//! A local dialect spells numbers with the region's decimal separator, separates arguments with
+//! its list separator, writes array constants with its column and row separators and uses the
+//! language's function names, booleans, errors, structured-reference items and R1C1 letters.
+//! Defined names, LET/LAMBDA parameters, table and sheet names and quoted text are never
+//! translated.
 
+use std::borrow::Cow;
 use std::fmt::Write;
 
 use gridcraft_core::{CellRef, col_to_letters, number_to_text};
+use gridcraft_locale::{Dialect, Language, TABLE_ITEM_ALL, TABLE_ITEM_DATA, TABLE_ITEM_HEADERS, TABLE_ITEM_THIS_ROW, TABLE_ITEM_TOTALS};
 
 use crate::ast::*;
+use crate::parser::{FILE_PREFIXES, UDF_PREFIX};
 
 /// Whether a sheet name needs quotes in a reference.
 pub fn needs_quotes(name: &str) -> bool {
+    needs_quotes_in(name, Dialect::INVARIANT.names)
+}
+
+/// Whether a sheet name needs quotes in a reference written in the language `names`.
+fn needs_quotes_in(name: &str, names: &Language) -> bool {
     if name.is_empty() {
         return true;
     }
@@ -16,20 +30,27 @@ pub fn needs_quotes(name: &str) -> bool {
         return true;
     }
     // Looks like a cell ref (`A1`, `R1C1`) or a boolean.
-    gridcraft_core::CellRef::parse(name).is_some() || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
+    gridcraft_core::CellRef::parse(name).is_some()
+        || name.eq_ignore_ascii_case("TRUE")
+        || name.eq_ignore_ascii_case("FALSE")
+        || names.parse_bool(name).is_some()
 }
 
 pub fn quote_sheet(name: &str) -> String {
-    if needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
+    quote_sheet_in(name, Dialect::INVARIANT.names)
 }
 
-fn sheet_prefix(s: &SheetSel) -> String {
+fn quote_sheet_in(name: &str, names: &Language) -> String {
+    if needs_quotes_in(name, names) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
+}
+
+fn sheet_prefix(s: &SheetSel, names: &Language) -> String {
     match s {
         SheetSel::Current => String::new(),
-        SheetSel::Named(n) => format!("{}!", quote_sheet(n)),
+        SheetSel::Named(n) => format!("{}!", quote_sheet_in(n, names)),
         SheetSel::Span(a, b) => {
             let joined = format!("{a}:{b}");
-            if needs_quotes(a) || needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
+            if needs_quotes_in(a, names) || needs_quotes_in(b, names) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
         }
     }
 }
@@ -39,6 +60,10 @@ fn anchor_a1(a: &Anchor) -> String {
 }
 
 pub fn reference_a1(r: &Reference) -> String {
+    reference_a1_in(r, Dialect::INVARIANT.names)
+}
+
+fn reference_a1_in(r: &Reference, names: &Language) -> String {
     let body = match &r.kind {
         RefKind::Cell(a) => anchor_a1(a),
         RefKind::Range(a, b) => format!("{}:{}", anchor_a1(a), anchor_a1(b)),
@@ -47,7 +72,7 @@ pub fn reference_a1(r: &Reference) -> String {
             format!("{}{}:{}{}", if *a0 { "$" } else { "" }, col_to_letters(*c0), if *a1 { "$" } else { "" }, col_to_letters(*c1))
         }
     };
-    format!("{}{}", sheet_prefix(&r.sheet), body)
+    format!("{}{}", sheet_prefix(&r.sheet, names), body)
 }
 
 fn r1c1_part(letter: char, v: u32, abs: bool, base: u32) -> String {
@@ -59,38 +84,50 @@ fn r1c1_part(letter: char, v: u32, abs: bool, base: u32) -> String {
     }
 }
 
-fn anchor_r1c1(a: &Anchor, at: CellRef) -> String {
-    format!("{}{}", r1c1_part('R', a.row, a.row_abs, at.row), r1c1_part('C', a.col, a.col_abs, at.col))
+fn anchor_r1c1(a: &Anchor, at: CellRef, [row, col]: [char; 2]) -> String {
+    format!("{}{}", r1c1_part(row, a.row, a.row_abs, at.row), r1c1_part(col, a.col, a.col_abs, at.col))
 }
 
 pub fn reference_r1c1(r: &Reference, at: CellRef) -> String {
+    reference_r1c1_in(r, at, Dialect::INVARIANT.names)
+}
+
+fn reference_r1c1_in(r: &Reference, at: CellRef, names: &Language) -> String {
+    let letters = names.r1c1;
+    let [row, col] = letters;
     let body = match &r.kind {
-        RefKind::Cell(a) => anchor_r1c1(a, at),
-        RefKind::Range(a, b) => format!("{}:{}", anchor_r1c1(a, at), anchor_r1c1(b, at)),
+        RefKind::Cell(a) => anchor_r1c1(a, at, letters),
+        RefKind::Range(a, b) => format!("{}:{}", anchor_r1c1(a, at, letters), anchor_r1c1(b, at, letters)),
         RefKind::Rows(r0, a0, r1, a1) => {
-            let (x, y) = (r1c1_part('R', *r0, *a0, at.row), r1c1_part('R', *r1, *a1, at.row));
+            let (x, y) = (r1c1_part(row, *r0, *a0, at.row), r1c1_part(row, *r1, *a1, at.row));
             if x == y { x } else { format!("{x}:{y}") }
         }
         RefKind::Cols(c0, a0, c1, a1) => {
-            let (x, y) = (r1c1_part('C', *c0, *a0, at.col), r1c1_part('C', *c1, *a1, at.col));
+            let (x, y) = (r1c1_part(col, *c0, *a0, at.col), r1c1_part(col, *c1, *a1, at.col));
             if x == y { x } else { format!("{x}:{y}") }
         }
     };
-    format!("{}{}", sheet_prefix(&r.sheet), body)
+    format!("{}{}", sheet_prefix(&r.sheet, names), body)
 }
 
-pub fn struct_ref(s: &StructRef) -> String {
+/// A structured reference in dialect `d`: items from the language, parts joined with the region's
+/// list separator.
+pub fn struct_ref(s: &StructRef, d: &Dialect) -> String {
     let esc = |c: &str| c.replace('\'', "''").replace('[', "'[").replace(']', "']").replace('#', "'#");
-    let item = |i: &StructItem| match i {
-        StructItem::All => "#All",
-        StructItem::Data => "#Data",
-        StructItem::Headers => "#Headers",
-        StructItem::Totals => "#Totals",
-        StructItem::ThisRow => "#This Row",
+    let item = |i: &StructItem| {
+        let idx = match i {
+            StructItem::All => TABLE_ITEM_ALL,
+            StructItem::Data => TABLE_ITEM_DATA,
+            StructItem::Headers => TABLE_ITEM_HEADERS,
+            StructItem::Totals => TABLE_ITEM_TOTALS,
+            StructItem::ThisRow => TABLE_ITEM_THIS_ROW,
+        };
+        d.names.table_items.get(idx).copied().unwrap_or("")
     };
+    let sep = d.regional.list;
     let this_row = s.specifiers == [StructItem::ThisRow];
     let mut out = s.table.clone();
-    let simple_col = |c: &str| !c.chars().any(|ch| matches!(ch, ' ' | '[' | ']' | '#' | '\'' | ',' | ':'));
+    let simple_col = |c: &str| !c.chars().any(|ch| matches!(ch, ' ' | '[' | ']' | '#' | '\'' | ',' | ':') || ch == sep);
     match (&s.col_start, &s.col_end) {
         (None, None) if s.specifiers.is_empty() => out.push_str("[]"),
         (None, None) if this_row => out.push_str("[@]"),
@@ -114,117 +151,187 @@ pub fn struct_ref(s: &StructRef) -> String {
                 (Some(a), None) => parts.push(format!("[{}]", esc(a))),
                 _ => {}
             }
-            let _ = write!(out, "[{}]", parts.join(","));
+            let _ = write!(out, "[{}]", parts.join(&sep.to_string()));
         }
     }
     out
 }
 
-fn number(n: f64) -> String {
-    number_to_text(n)
+/// A number with the region's decimal separator.
+fn number(n: f64, decimal: char) -> String {
+    let t = number_to_text(n);
+    if decimal == '.' { t } else { t.replace('.', &decimal.to_string()) }
 }
 
-/// Prints an expression in A1 notation.
+/// The spelling of a function name in language `names`:
+/// - a canonical built-in prints its local name;
+/// - file-prefixed names (`_XLFN.FORECAST.ETS`) print the prefix in lower case;
+/// - `_XLUDF.X` prints as plain `X` when `X` is a built-in this language does not know (so that
+///   re-reading it in the same dialect gives back `_XLUDF.X`), and as `_xludf.X` otherwise.
+fn call_name<'a>(name: &'a str, names: &Language) -> Cow<'a, str> {
+    if let Some(local) = names.local_function(name) {
+        return Cow::Borrowed(local);
+    }
+    let strip = |p: &str| name.get(..p.len()).filter(|h| h.eq_ignore_ascii_case(p)).and_then(|_| name.get(p.len()..));
+    if let Some(rest) = strip(UDF_PREFIX) {
+        if crate::catalog::is_builtin(rest) && names.canonical_function(rest).is_none() {
+            return Cow::Borrowed(rest);
+        }
+        return Cow::Owned(format!("{}{rest}", UDF_PREFIX.to_ascii_lowercase()));
+    }
+    for p in FILE_PREFIXES {
+        if let Some(rest) = strip(p) {
+            return Cow::Owned(format!("{}{rest}", p.to_ascii_lowercase()));
+        }
+    }
+    Cow::Borrowed(name)
+}
+
+/// Prints an expression in canonical A1 notation.
 pub fn print(e: &Expr) -> String {
+    print_local(e, &Dialect::INVARIANT)
+}
+
+/// Prints an expression in A1 notation written in dialect `d`.
+pub fn print_local(e: &Expr, d: &Dialect) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, None);
+    write_expr(&mut s, e, None, d);
     s
 }
 
-/// Prints an expression in R1C1 notation relative to `at`.
+/// Prints an expression in canonical R1C1 notation relative to `at`.
 pub fn print_r1c1(e: &Expr, at: CellRef) -> String {
+    print_r1c1_local(e, at, &Dialect::INVARIANT)
+}
+
+/// Prints an expression in R1C1 notation relative to `at`, written in dialect `d` (`L`/`C` in
+/// Portuguese).
+pub fn print_r1c1_local(e: &Expr, at: CellRef, d: &Dialect) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, Some(at));
+    write_expr(&mut s, e, Some(at), d);
     s
 }
 
-fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
+fn write_args(s: &mut String, args: &[Expr], r1c1: Option<CellRef>, d: &Dialect) {
+    s.push('(');
+    for (i, a) in args.iter().enumerate() {
+        if i > 0 {
+            s.push(d.regional.list);
+        }
+        write_expr(s, a, r1c1, d);
+    }
+    s.push(')');
+}
+
+/// Writes `e`. Left-nested chains (`1+1+…`, `A1%%%`, `f(1)(2)…`) can be arbitrarily deep, so the
+/// left spine is written with a loop; only right operands and arguments recurse, and those are
+/// bounded by the parser's nesting limit.
+fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>, d: &Dialect) {
+    enum After<'a> {
+        Binary(BinOp, &'a Expr),
+        Percent,
+        Invoke(&'a [Expr]),
+    }
+    let mut after: Vec<After<'_>> = Vec::new();
+    let mut cur = e;
+    loop {
+        match cur {
+            Expr::Binary(op, a, b) => {
+                after.push(After::Binary(*op, b));
+                cur = a;
+            }
+            Expr::Unary(UnOp::Percent, x) => {
+                after.push(After::Percent);
+                cur = x;
+            }
+            Expr::Invoke(c, args) => {
+                after.push(After::Invoke(args));
+                cur = c;
+            }
+            other => {
+                write_node(s, other, r1c1, d);
+                break;
+            }
+        }
+    }
+    while let Some(a) = after.pop() {
+        match a {
+            After::Binary(op, b) => {
+                match op {
+                    BinOp::Union => s.push(d.regional.list),
+                    other => s.push_str(other.symbol()),
+                }
+                write_expr(s, b, r1c1, d);
+            }
+            After::Percent => s.push('%'),
+            After::Invoke(args) => write_args(s, args, r1c1, d),
+        }
+    }
+}
+
+/// Writes a node that is not part of a left spine (its children are written by [`write_expr`]).
+fn write_node(s: &mut String, e: &Expr, r1c1: Option<CellRef>, d: &Dialect) {
     match e {
-        Expr::Number(n) => s.push_str(&number(*n)),
+        Expr::Number(n) => s.push_str(&number(*n, d.regional.decimal)),
         Expr::Text(t) => {
             s.push('"');
             s.push_str(&t.replace('"', "\"\""));
             s.push('"');
         }
-        Expr::Bool(b) => s.push_str(if *b { "TRUE" } else { "FALSE" }),
-        Expr::Error(err) => s.push_str(err.as_str()),
+        Expr::Bool(b) => s.push_str(d.names.bool_text(*b)),
+        Expr::Error(err) => s.push_str(d.names.local_error(err.as_str())),
         Expr::Array(rows) => {
             s.push('{');
             for (ri, row) in rows.iter().enumerate() {
                 if ri > 0 {
-                    s.push(';');
+                    s.push(d.regional.array_row);
                 }
                 for (ci, el) in row.iter().enumerate() {
                     if ci > 0 {
-                        s.push(',');
+                        s.push(d.regional.array_col);
                     }
-                    write_expr(s, el, r1c1);
+                    write_expr(s, el, r1c1, d);
                 }
             }
             s.push('}');
         }
         Expr::Ref(r) => match r1c1 {
-            Some(at) => s.push_str(&reference_r1c1(r, at)),
-            None => s.push_str(&reference_a1(r)),
+            Some(at) => s.push_str(&reference_r1c1_in(r, at, d.names)),
+            None => s.push_str(&reference_a1_in(r, d.names)),
         },
         Expr::Name(n) => s.push_str(n),
-        Expr::Struct(st) => s.push_str(&struct_ref(st)),
+        Expr::Struct(st) => s.push_str(&struct_ref(st, d)),
         Expr::Unary(op, x) => match op {
             UnOp::Neg => {
                 s.push('-');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, d);
             }
             UnOp::Plus => {
                 s.push('+');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, d);
             }
             UnOp::At => {
                 s.push('@');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, d);
             }
-            UnOp::Percent => {
-                write_expr(s, x, r1c1);
-                s.push('%');
-            }
+            UnOp::Percent => write_expr(s, e, r1c1, d),
             UnOp::Spill => {
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, d);
                 // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
                 if !matches!(**x, Expr::Error(_)) {
                     s.push('#');
                 }
             }
         },
-        Expr::Binary(op, a, b) => {
-            write_expr(s, a, r1c1);
-            s.push_str(op.symbol());
-            write_expr(s, b, r1c1);
-        }
+        Expr::Binary(..) | Expr::Invoke(..) => write_expr(s, e, r1c1, d),
         Expr::Call(name, args) => {
-            s.push_str(name);
-            s.push('(');
-            for (i, a) in args.iter().enumerate() {
-                if i > 0 {
-                    s.push(',');
-                }
-                write_expr(s, a, r1c1);
-            }
-            s.push(')');
-        }
-        Expr::Invoke(c, args) => {
-            write_expr(s, c, r1c1);
-            s.push('(');
-            for (i, a) in args.iter().enumerate() {
-                if i > 0 {
-                    s.push(',');
-                }
-                write_expr(s, a, r1c1);
-            }
-            s.push(')');
+            s.push_str(&call_name(name, d.names));
+            write_args(s, args, r1c1, d);
         }
         Expr::Missing => {}
         Expr::Paren(x) => {
             s.push('(');
-            write_expr(s, x, r1c1);
+            write_expr(s, x, r1c1, d);
             s.push(')');
         }
     }

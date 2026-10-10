@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
+gridcraft-l10n = { workspace = true }
+gridcraft-locale = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

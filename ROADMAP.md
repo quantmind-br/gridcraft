@@ -4,7 +4,7 @@ GridCraft aims at full Microsoft Excel parity — and to be better: faster, open
 native format), fully scriptable by agents (MCP + control channel + CLI), and available on the
 web.
 
-## Status (2026-10-07)
+## Status (2026-10-10)
 
 ### Where we are
 
@@ -13,7 +13,7 @@ web.
 | Ribbon/menu command catalog | **89%** (258 / 290) | `cargo xtask parity` → [`docs/parity.md`](docs/parity.md). Home, Draw, Page Layout, Formulas, Automate, Chart Design and PivotTable Design are at 100%. |
 | Worksheet functions | **~93%** of Excel's ~545 | Missing: ODDF*/ODDL*, BAHTTEXT, IMAGE, TRANSLATE, COPILOT/PY, STOCKHISTORY, RTD |
 | Feature depth (weighted) | **~65%** | The catalog counts a command once it exists; many are shallower than Excel's (see "What's left") |
-| Tests | 332 passing | engine, formula, functions, calc, XLSX (incl. PivotTable round-trip), PDF, MCP, CLI, kittest UI |
+| Tests | 649 passing | engine, formula, functions, calc, XLSX (incl. PivotTable round-trip), PDF, MCP, CLI, locale and l10n data, kittest UI |
 
 The catalog number is generous: it says "this button does something real", not "it does
 everything Excel's does". The weighted depth figure is our honest estimate of how much of what an
@@ -61,7 +61,7 @@ by open equivalents or left out, not cloned.
 | XLSX depth | Remaining OOXML parts (form controls, slicer caches, external links, OLE stubs), round-trip of everything we don't model | 16 |
 | Functions | The remaining ~35 functions, exact Excel edge-case behaviour across the long tail | 10 |
 | Performance | Parallel recalc, 1M-row workbooks everywhere (sort, filter, fill), memory | 14 |
-| Fidelity | Side-by-side pixel tuning against Excel, keyboard shortcut completeness, accessibility, localisation | 24 |
+| Fidelity | Side-by-side pixel tuning against Excel, keyboard shortcut completeness, accessibility, localisation polish (ribbon groups that collapse for longer translated labels, more languages) | 24 |
 | **Total** | | **≈ 180** |
 
 **Working today**
@@ -111,6 +111,16 @@ by open equivalents or left out, not cloned.
 - Platforms: macOS, Windows, Linux, FreeBSD; web (WASM via trunk). Release workflows for
   signed/notarized macOS universal DMG, signed Windows x64/x86 MSI + zip, Linux AppImage/deb/rpm/
   tar.gz + Flatpak manifest, FreeBSD tarball and a web zip.
+- Languages: the interface, function names, error values, booleans, number-format codes and
+  separators in 11 languages: English (US), Portuguese (Brazil, Portugal), Spanish, French, German,
+  Italian, Japanese, Korean and Chinese (Simplified, Traditional). As in Excel, function names
+  follow the formula language and separators follow the regional format (`=SOMA(1,5;2)`,
+  `{1\2;3\4}` in pt-BR), while files and the journal stay canonical (English names), so a workbook
+  opens the same in every language. Keyboard shortcuts follow Excel where it localises them (pt-BR
+  Ctrl+N is bold). Chosen in Options › Language, with `app.setLocale`, or with `--locale` (CLI,
+  MCP); defaults come from the operating system or browser and are remembered (`prefs.json`,
+  localStorage on the web). Commands and MCP tools take and return local text next to canonical
+  (`inputLocal`, `formulaLocal`, `refersToLocal`).
 
 ## Milestones
 
@@ -128,11 +138,12 @@ by open equivalents or left out, not cloned.
 | M9 | Page layout & print | 🟡 most; true Page Layout view remains |
 | M10 | PivotTables, Solver, Analysis ToolPak | 🟡 PivotTables in; slicers, Solver, ToolPak remain |
 | M11 | Automation (record actions, scripts) | ✅ done |
-| M12 | Performance, accessibility, i18n | 🟡 partial |
+| M12 | Performance, accessibility, i18n | 🟡 partial; i18n in (11 languages), performance and accessibility remain |
 | M13 | Release & polish | 🟡 tooling ready; needs release secrets |
 
 ## How to measure
 
 - `cargo xtask parity` — catalog coverage (feature names from Excel's ribbon and menus).
 - `cargo test --workspace` — engine, formula, function, XLSX and UI behaviour.
+- `cargo xtask locales`: per-language coverage of messages, function names and shortcuts.
 - `cargo run --release -p gridcraft-ui-egui --example snapshot -- --sample sales out.png` — look at the UI offscreen.

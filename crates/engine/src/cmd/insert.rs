@@ -153,7 +153,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font..fill..}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?|valueLocal?, value2?|value2Local?, formula?|formulaLocal? (Local = spelled in the session's language and region, or the `locale` tag), text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font..fill..}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}, locale?}",
             has_doc,
             add_cf
         ),
@@ -205,9 +205,10 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
         let sh = d.wb.sheet(sheet);
         sh.is_some_and(|sh| (r.start.col..=r.end.col).all(|c| sh.value(CellRef::new(r.start.row, c)).is_text()) && r.height() > 1)
     });
-    let name = str_param(p, "name")
-        .map(str::to_string)
-        .unwrap_or_else(|| (1..).map(|n| format!("Table{n}")).find(|n| d.wb.table(n).is_none()).unwrap_or_else(|| "Table".into()));
+    let name = str_param(p, "name").map(str::to_string).unwrap_or_else(|| {
+        let base = d.wb.locale.ui.content("table");
+        (1..).map(|n| format!("{base}{n}")).find(|n| d.wb.table(n).is_none()).unwrap_or_else(|| base.into())
+    });
     if d.wb.table(&name).is_some() || d.wb.names.iter().any(|n| n.name.eq_ignore_ascii_case(&name)) {
         return Err(EngineError::Other("The name entered already exists. Enter a unique name.".into()));
     }
@@ -280,6 +281,7 @@ fn find_table(s: &Session, p: &Json) -> Result<(usize, usize)> {
 fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     let on = bool_param(p, "on");
+    let total_label = s.locale().ui.content("total");
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(t) = sh.tables.get_mut(ti) else { return Ok(Json::Null) };
@@ -291,7 +293,7 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
                     if v {
                         t.range.end.row += 1;
                         if let Some(first) = t.columns.first_mut() {
-                            first.totals_label = Some("Total".into());
+                            first.totals_label = Some(total_label.into());
                         }
                         if t.columns.len() > 1
                             && let Some(last) = t.columns.last_mut()
@@ -554,7 +556,7 @@ fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
         if series.len() == 1 {
             series[0].name.as_ref().map(|n| gridcraft_calc::evaluate(&d.wb, sheet, at, n).display())
         } else {
-            Some("Chart Title".into())
+            Some(d.wb.locale.ui.content("chart_title").into())
         }
     });
     let chart = Chart {
@@ -955,6 +957,8 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("newFormattingRule".into(), json!({})));
         return ok();
     };
+    let loc = crate::locale::call_locale(s, p)?;
+    let sys = s.doc()?.wb.date_system;
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
     let style = Box::new(match rule.get("style") {
         Some(st) if st.is_object() => {
@@ -993,18 +997,14 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 "lessOrEqual" => CfOperator::LessOrEqual,
                 _ => CfOperator::Greater,
             };
-            let a = rule.get("value").map(super::edit::json_to_input).unwrap_or_default();
-            let b = rule.get("value2").map(super::edit::json_to_input);
-            let quote = |v: String| {
-                if gridcraft_core::parse::parse_number_text(&v).is_some() || v.starts_with('=') {
-                    v.trim_start_matches('=').to_string()
-                } else {
-                    format!("\"{}\"", v.replace('"', "\"\""))
-                }
-            };
-            CfRule::CellIs { op, a: quote(a), b: b.map(quote), style }
+            // `valueLocal` is read like typed input: numbers by the region, `=…` as a local formula.
+            let operand = |key: &str| crate::locale::cf_operand(rule, key, &loc, sys);
+            CfRule::CellIs { op, a: operand("value")?.unwrap_or_else(|| "\"\"".into()), b: operand("value2")?, style }
         }
-        "expression" => CfRule::Expression { formula: g("formula").unwrap_or_default().trim_start_matches('=').to_string(), style },
+        "expression" => CfRule::Expression {
+            formula: crate::locale::canonical_formula_param(rule, "formula", &loc)?.unwrap_or_default().trim_start_matches('=').to_string(),
+            style,
+        },
         "containsText" => CfRule::ContainsText { text: g("text").unwrap_or_default(), style },
         "notContainsText" => CfRule::NotContainsText { text: g("text").unwrap_or_default(), style },
         "beginsWith" => CfRule::BeginsWith { text: g("text").unwrap_or_default(), style },
@@ -1085,15 +1085,29 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// The formulas of a rule spelled in `d`: `{formula}` for expressions, `{a, b}` for cell-value rules.
+fn cf_rule_local(rule: &CfRule, d: &gridcraft_locale::Dialect) -> Json {
+    let local = |f: &str| format!("={}", crate::locale::to_local_body(f, d));
+    match rule {
+        CfRule::Expression { formula, .. } => json!({"formula": local(formula)}),
+        CfRule::CellIs { a, b, .. } => json!({"a": local(a), "b": b.as_deref().map(local)}),
+        _ => Json::Null,
+    }
+}
+
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() {
-        let list: Vec<Json> = s
-            .doc()?
+        let d = s.doc()?;
+        let dialect = d.wb.locale.dialect();
+        let list: Vec<Json> = d
             .wb
             .sheet(sheet)
             .map(|sh| {
-                sh.cond_formats.iter().map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule})).collect()
+                sh.cond_formats
+                    .iter()
+                    .map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule, "ruleLocal": cf_rule_local(&c.rule, &dialect)}))
+                    .collect()
             })
             .unwrap_or_default();
         return Ok(json!({"rules": list}));
