@@ -188,12 +188,13 @@ pub fn tokenize_local(src: &str, d: &Dialect) -> Result<Vec<Token>, LexError> {
             }
             c if c.is_ascii_digit() || (c == r.decimal && ch(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
                 // Number, unless it is a row range like 1:3 (handled by parser via Word) — numbers
-                // followed by ':' and digits are row refs: lex as Word.
+                // followed by ':' and digits are row refs: lex as Word. Array constants hold no
+                // references, and `:` separates their rows in some regions (ru-RU `{1;2:3;4}`).
                 let mut j = i;
                 while ch(j).is_some_and(|d| d.is_ascii_digit()) {
                     j += 1;
                 }
-                let is_row_ref = ch(j) == Some(':') && {
+                let is_row_ref = !in_array && ch(j) == Some(':') && {
                     let mut k = j + 1;
                     if ch(k) == Some('$') {
                         k += 1;

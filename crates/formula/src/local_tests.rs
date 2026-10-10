@@ -152,6 +152,16 @@ fn de_de_arrays_and_numbers() {
 }
 
 #[test]
+fn ru_ru_array_rows_are_colons_not_row_ranges() {
+    let d = dialect("ru-RU", "ru-RU");
+    assert_eq!(local("{1;2:3;4}", &d), parse("{1,2;3,4}").unwrap());
+    assert_eq!(local("{1:2:3}", &d), parse("{1;2;3}").unwrap());
+    assert_eq!(print_local(&parse("{1,2;3,4}").unwrap(), &d), "{1;2:3;4}");
+    // Outside braces `:` is still the range operator, whole rows included.
+    assert_eq!(local("СУММ(1:3;A1:B2)", &d), parse("SUM(1:3,A1:B2)").unwrap());
+}
+
+#[test]
 fn english_names_with_a_german_region() {
     let d = dialect("en-US", "de-DE");
     assert_eq!(local("SUM(1,5;2)", &d), parse("SUM(1.5,2)").unwrap());
