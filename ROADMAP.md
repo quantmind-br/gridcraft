@@ -13,7 +13,7 @@ web.
 | Ribbon/menu command catalog | **89%** (258 / 290) | `cargo xtask parity` → [`docs/parity.md`](docs/parity.md). Home, Draw, Page Layout, Formulas, Automate, Chart Design and PivotTable Design are at 100%. |
 | Worksheet functions | **~93%** of Excel's ~545 | Missing: ODDF*/ODDL*, BAHTTEXT, IMAGE, TRANSLATE, COPILOT/PY, STOCKHISTORY, RTD |
 | Feature depth (weighted) | **~65%** | The catalog counts a command once it exists; many are shallower than Excel's (see "What's left") |
-| Tests | 562 passing | engine, formula, functions, calc, XLSX (incl. PivotTable round-trip), PDF, MCP, CLI, locale and l10n data, kittest UI |
+| Tests | 649 passing | engine, formula, functions, calc, XLSX (incl. PivotTable round-trip), PDF, MCP, CLI, locale and l10n data, kittest UI |
 
 The catalog number is generous: it says "this button does something real", not "it does
 everything Excel's does". The weighted depth figure is our honest estimate of how much of what an
