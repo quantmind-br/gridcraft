@@ -13,7 +13,7 @@ use gridcraft_core::{CellRef, col_to_letters, number_to_text};
 use gridcraft_locale::{Dialect, Language, TABLE_ITEM_ALL, TABLE_ITEM_DATA, TABLE_ITEM_HEADERS, TABLE_ITEM_THIS_ROW, TABLE_ITEM_TOTALS};
 
 use crate::ast::*;
-use crate::parser::{FILE_PREFIXES, UDF_PREFIX};
+use crate::parser::{FILE_PREFIXES, KnownNames, UDF_PREFIX, bindable_bool, binds_after, is_bound, no_names};
 
 /// Whether a sheet name needs quotes in a reference.
 pub fn needs_quotes(name: &str) -> bool {
@@ -194,8 +194,15 @@ pub fn print(e: &Expr) -> String {
 
 /// Prints an expression in A1 notation written in dialect `d`.
 pub fn print_local(e: &Expr, d: &Dialect) -> String {
+    print_local_with(e, d, &no_names)
+}
+
+/// [`print_local`] for text read back with [`crate::parse_local_with`] and the same `known`
+/// names: where a local function name or boolean is also a name in scope, the built-in is
+/// written so that it still reads as the built-in (`_xlfn.SUM(…)`, `_xlfn.FALSE()`).
+pub fn print_local_with(e: &Expr, d: &Dialect, known: KnownNames<'_>) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, None, d);
+    Printer { d, r1c1: None, known, bindings: Vec::new() }.expr(&mut s, e);
     s
 }
 
@@ -208,131 +215,173 @@ pub fn print_r1c1(e: &Expr, at: CellRef) -> String {
 /// Portuguese).
 pub fn print_r1c1_local(e: &Expr, at: CellRef, d: &Dialect) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, Some(at), d);
+    Printer { d, r1c1: Some(at), known: &no_names, bindings: Vec::new() }.expr(&mut s, e);
     s
 }
 
-fn write_args(s: &mut String, args: &[Expr], r1c1: Option<CellRef>, d: &Dialect) {
-    s.push('(');
-    for (i, a) in args.iter().enumerate() {
-        if i > 0 {
-            s.push(d.regional.list);
-        }
-        write_expr(s, a, r1c1, d);
-    }
-    s.push(')');
+struct Printer<'a> {
+    d: &'a Dialect<'a>,
+    r1c1: Option<CellRef>,
+    known: KnownNames<'a>,
+    /// Names bound by the LET/LAMBDA calls being written, innermost last.
+    bindings: Vec<String>,
 }
 
-/// Writes `e`. Left-nested chains (`1+1+…`, `A1%%%`, `f(1)(2)…`) can be arbitrarily deep, so the
-/// left spine is written with a loop; only right operands and arguments recurse, and those are
-/// bounded by the parser's nesting limit.
-fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>, d: &Dialect) {
-    enum After<'a> {
-        Binary(BinOp, &'a Expr),
-        Percent,
-        Invoke(&'a [Expr]),
+impl Printer<'_> {
+    fn bound(&self, name: &str) -> bool {
+        is_bound(name, &self.bindings, self.known)
     }
-    let mut after: Vec<After<'_>> = Vec::new();
-    let mut cur = e;
-    loop {
-        match cur {
-            Expr::Binary(op, a, b) => {
-                after.push(After::Binary(*op, b));
-                cur = a;
-            }
-            Expr::Unary(UnOp::Percent, x) => {
-                after.push(After::Percent);
-                cur = x;
-            }
-            Expr::Invoke(c, args) => {
-                after.push(After::Invoke(args));
-                cur = c;
-            }
-            other => {
-                write_node(s, other, r1c1, d);
-                break;
-            }
-        }
-    }
-    while let Some(a) = after.pop() {
-        match a {
-            After::Binary(op, b) => {
-                match op {
-                    BinOp::Union => s.push(d.regional.list),
-                    other => s.push_str(other.symbol()),
-                }
-                write_expr(s, b, r1c1, d);
-            }
-            After::Percent => s.push('%'),
-            After::Invoke(args) => write_args(s, args, r1c1, d),
-        }
-    }
-}
 
-/// Writes a node that is not part of a left spine (its children are written by [`write_expr`]).
-fn write_node(s: &mut String, e: &Expr, r1c1: Option<CellRef>, d: &Dialect) {
-    match e {
-        Expr::Number(n) => s.push_str(&number(*n, d.regional.decimal)),
-        Expr::Text(t) => {
-            s.push('"');
-            s.push_str(&t.replace('"', "\"\""));
-            s.push('"');
+    /// The spelling of a call to `name`. When that spelling is also a name in scope the parser
+    /// would call the name, so a built-in is written with its file prefix instead.
+    fn call_name<'n>(&self, name: &'n str) -> Cow<'n, str> {
+        let local = call_name(name, self.d.names);
+        if !self.bound(&local) || local.to_ascii_uppercase() == name {
+            return local;
         }
-        Expr::Bool(b) => s.push_str(d.names.bool_text(*b)),
-        Expr::Error(err) => s.push_str(d.names.local_error(err.as_str())),
-        Expr::Array(rows) => {
-            s.push('{');
-            for (ri, row) in rows.iter().enumerate() {
-                if ri > 0 {
-                    s.push(d.regional.array_row);
+        if crate::catalog::is_builtin(name) { Cow::Owned(format!("_xlfn.{name}")) } else { call_name(name, Dialect::INVARIANT.names) }
+    }
+
+    fn args(&mut self, s: &mut String, function: &str, args: &[Expr]) {
+        s.push('(');
+        let saved = self.bindings.len();
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                s.push(self.d.regional.list);
+            }
+            self.expr(s, a);
+            if let Some(n) = binds_after(function, args, i, i + 1 < args.len()) {
+                self.bindings.push(n.to_string());
+            }
+        }
+        self.bindings.truncate(saved);
+        s.push(')');
+    }
+
+    /// Writes `e`. Left-nested chains (`1+1+…`, `A1%%%`, `f(1)(2)…`) can be arbitrarily deep, so
+    /// the left spine is written with a loop; only right operands and arguments recurse, and
+    /// those are bounded by the parser's nesting limit.
+    fn expr(&mut self, s: &mut String, e: &Expr) {
+        enum After<'a> {
+            Binary(BinOp, &'a Expr),
+            Percent,
+            Invoke(&'a [Expr]),
+        }
+        let mut after: Vec<After<'_>> = Vec::new();
+        let mut cur = e;
+        loop {
+            match cur {
+                Expr::Binary(op, a, b) => {
+                    after.push(After::Binary(*op, b));
+                    cur = a;
                 }
-                for (ci, el) in row.iter().enumerate() {
-                    if ci > 0 {
-                        s.push(d.regional.array_col);
+                Expr::Unary(UnOp::Percent, x) => {
+                    after.push(After::Percent);
+                    cur = x;
+                }
+                Expr::Invoke(c, args) => {
+                    after.push(After::Invoke(args));
+                    cur = c;
+                }
+                other => {
+                    self.node(s, other);
+                    break;
+                }
+            }
+        }
+        while let Some(a) = after.pop() {
+            match a {
+                After::Binary(op, b) => {
+                    match op {
+                        BinOp::Union => s.push(self.d.regional.list),
+                        other => s.push_str(other.symbol()),
                     }
-                    write_expr(s, el, r1c1, d);
+                    self.expr(s, b);
+                }
+                After::Percent => s.push('%'),
+                After::Invoke(args) => self.args(s, "", args),
+            }
+        }
+    }
+
+    /// Writes a node that is not part of a left spine (its children are written by [`Self::expr`]).
+    fn node(&mut self, s: &mut String, e: &Expr) {
+        let d = self.d;
+        match e {
+            Expr::Number(n) => s.push_str(&number(*n, d.regional.decimal)),
+            Expr::Text(t) => {
+                s.push('"');
+                s.push_str(&t.replace('"', "\"\""));
+                s.push('"');
+            }
+            Expr::Bool(b) => {
+                let local = d.names.bool_text(*b);
+                if bindable_bool(local) && self.bound(local) {
+                    // The TRUE() and FALSE() functions return the same value.
+                    s.push_str(if *b { "_xlfn.TRUE()" } else { "_xlfn.FALSE()" });
+                } else {
+                    s.push_str(local);
                 }
             }
-            s.push('}');
-        }
-        Expr::Ref(r) => match r1c1 {
-            Some(at) => s.push_str(&reference_r1c1_in(r, at, d.names)),
-            None => s.push_str(&reference_a1_in(r, d.names)),
-        },
-        Expr::Name(n) => s.push_str(n),
-        Expr::Struct(st) => s.push_str(&struct_ref(st, d)),
-        Expr::Unary(op, x) => match op {
-            UnOp::Neg => {
-                s.push('-');
-                write_expr(s, x, r1c1, d);
-            }
-            UnOp::Plus => {
-                s.push('+');
-                write_expr(s, x, r1c1, d);
-            }
-            UnOp::At => {
-                s.push('@');
-                write_expr(s, x, r1c1, d);
-            }
-            UnOp::Percent => write_expr(s, e, r1c1, d),
-            UnOp::Spill => {
-                write_expr(s, x, r1c1, d);
-                // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
-                if !matches!(**x, Expr::Error(_)) {
-                    s.push('#');
+            Expr::Error(err) => s.push_str(d.names.local_error(err.as_str())),
+            Expr::Array(rows) => {
+                s.push('{');
+                for (ri, row) in rows.iter().enumerate() {
+                    if ri > 0 {
+                        s.push(d.regional.array_row);
+                    }
+                    for (ci, el) in row.iter().enumerate() {
+                        if ci > 0 {
+                            s.push(d.regional.array_col);
+                        }
+                        // An array constant holds no names: its booleans are always booleans.
+                        match el {
+                            Expr::Bool(b) => s.push_str(d.names.bool_text(*b)),
+                            other => self.expr(s, other),
+                        }
+                    }
                 }
+                s.push('}');
             }
-        },
-        Expr::Binary(..) | Expr::Invoke(..) => write_expr(s, e, r1c1, d),
-        Expr::Call(name, args) => {
-            s.push_str(&call_name(name, d.names));
-            write_args(s, args, r1c1, d);
-        }
-        Expr::Missing => {}
-        Expr::Paren(x) => {
-            s.push('(');
-            write_expr(s, x, r1c1, d);
-            s.push(')');
+            Expr::Ref(r) => match self.r1c1 {
+                Some(at) => s.push_str(&reference_r1c1_in(r, at, d.names)),
+                None => s.push_str(&reference_a1_in(r, d.names)),
+            },
+            Expr::Name(n) => s.push_str(n),
+            Expr::Struct(st) => s.push_str(&struct_ref(st, d)),
+            Expr::Unary(op, x) => match op {
+                UnOp::Neg => {
+                    s.push('-');
+                    self.expr(s, x);
+                }
+                UnOp::Plus => {
+                    s.push('+');
+                    self.expr(s, x);
+                }
+                UnOp::At => {
+                    s.push('@');
+                    self.expr(s, x);
+                }
+                UnOp::Percent => self.expr(s, e),
+                UnOp::Spill => {
+                    self.expr(s, x);
+                    // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
+                    if !matches!(**x, Expr::Error(_)) {
+                        s.push('#');
+                    }
+                }
+            },
+            Expr::Binary(..) | Expr::Invoke(..) => self.expr(s, e),
+            Expr::Call(name, args) => {
+                s.push_str(&self.call_name(name));
+                self.args(s, name, args);
+            }
+            Expr::Missing => {}
+            Expr::Paren(x) => {
+                s.push('(');
+                self.expr(s, x);
+                s.push(')');
+            }
         }
     }
 }

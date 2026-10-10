@@ -8,7 +8,7 @@ use gridcraft_locale::{Dialect, LANGUAGES, REGIONS, language, region};
 
 use crate::ast::*;
 use crate::lexer::{Tok, tokenize_local};
-use crate::{parse, parse_local, print, print_local, print_r1c1_local};
+use crate::{parse, parse_local, parse_local_with, print, print_local, print_local_with, print_r1c1_local};
 
 fn dialect(lang: &str, reg: &str) -> Dialect<'static> {
     Dialect { names: language(lang).unwrap_or_else(|| panic!("language {lang}")), regional: region(reg).unwrap_or_else(|| panic!("region {reg}")) }
@@ -259,6 +259,58 @@ fn canonical_booleans_are_rejected_in_a_dialect_without_them() {
     // What parsed locally keeps its meaning through canonical text.
     let e = local("SE(A1=VERDADEIRO;1;0)", &d);
     assert_eq!(parse(&print(&e)).unwrap(), e);
+}
+
+// ---------------------------------------------------------------- names shadow local built-ins
+
+#[test]
+fn names_in_scope_shadow_local_function_names_and_booleans() {
+    let es = dialect("es-ES", "es-ES");
+    let known = |n: &str| ["SUMA", "FALSO"].iter().any(|k| k.eq_ignore_ascii_case(n));
+    let read = |src: &str, known: &dyn Fn(&str) -> bool| print(&parse_local_with(src, &es, known).unwrap_or_else(|e| panic!("{src}: {e}")));
+    assert_eq!(read("SUMA(2;3)+FALSO+SI(VERDADERO;4;5)", &known), "SUMA(2,3)+FALSO+IF(TRUE,4,5)");
+    for (src, canonical) in [
+        ("LET(FALSO;7;FALSO)", "LET(FALSO,7,FALSO)"),
+        // A LET name is not in scope in its own value.
+        ("LET(falso;FALSO;SI(falso;1;2))", "LET(falso,FALSE,IF(falso,1,2))"),
+        ("LET(SUMA;LAMBDA(x;x+1);SUMA(2))", "LET(SUMA,LAMBDA(x,x+1),SUMA(2))"),
+        ("LET(falso;7;valor;FALSO;valor)", "LET(falso,7,valor,FALSO,valor)"),
+        ("LAMBDA(FALSO;FALSO)(7)", "LAMBDA(FALSO,FALSO)(7)"),
+        ("LAMBDA(SUMA;SUMA(2))(LAMBDA(x;x+1))", "LAMBDA(SUMA,SUMA(2))(LAMBDA(x,x+1))"),
+        // The scope ends with the call.
+        ("LET(FALSO;7;FALSO)+FALSO+SUMA(1)", "LET(FALSO,7,FALSO)+FALSE+SUM(1)"),
+        ("LET(FALSO;7;LAMBDA(x;FALSO+x)(1))", "LET(FALSO,7,LAMBDA(x,FALSO+x)(1))"),
+    ] {
+        assert_eq!(read(src, &crate::no_names), canonical, "{src}");
+    }
+    // A built-in whose local spelling is a name in scope is written so it still reads as the
+    // built-in; a boolean becomes the TRUE()/FALSE() function, which has the same value.
+    let e = parse("LET(SUMA,LAMBDA(x,x+1),SUM(SUMA(2),FALSE))").unwrap();
+    let shown = print_local_with(&e, &es, &known);
+    assert_eq!(shown, "LET(SUMA;LAMBDA(x;x+1);_xlfn.SUM(SUMA(2);_xlfn.FALSE()))");
+    assert_eq!(read(&shown, &known), "LET(SUMA,LAMBDA(x,x+1),SUM(SUMA(2),FALSE()))");
+    // Array constants hold no names.
+    assert_eq!(read("{FALSO\\VERDADERO}", &known), "{FALSE,TRUE}");
+}
+
+#[test]
+fn names_spelled_like_local_built_ins_round_trip_in_every_language() {
+    for lang in LANGUAGES {
+        let d = dialect(lang.tag, lang.tag);
+        let sum = lang.local_function("SUM").unwrap_or("SUM");
+        let falso = lang.bool_text(false);
+        let known = |n: &str| n.eq_ignore_ascii_case(falso);
+        let mut sources = vec![format!("LET({sum},LAMBDA(x,x+1),SUM({sum}(2),1))"), format!("LAMBDA({sum},{sum}(2)+SUM(3))(LAMBDA(x,x))")];
+        if crate::parser::bindable_bool(falso) {
+            sources.push(format!("IF({falso},LET({falso},2,{falso}+1),LAMBDA({falso},{falso})(3))"));
+        }
+        for src in sources {
+            let e = parse(&src).unwrap_or_else(|err| panic!("{src}: {err}"));
+            let text = print_local_with(&e, &d, &known);
+            let back = parse_local_with(&text, &d, &known).unwrap_or_else(|err| panic!("{}: `{text}`: {err}", lang.tag));
+            assert_eq!(back, e, "{}: `{text}`", lang.tag);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- deep left-nested chains

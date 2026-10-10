@@ -27,14 +27,71 @@ pub fn parse(src: &str) -> Result<Expr, ParseError> {
 /// Parses formula text written in dialect `d` (localized function names, booleans, errors and
 /// separators) into the canonical syntax tree. A leading `=` is accepted and skipped.
 pub fn parse_local(src: &str, d: &Dialect) -> Result<Expr, ParseError> {
+    parse_local_with(src, d, &no_names)
+}
+
+/// Workbook names (defined names and tables) known when reading or writing a formula; see
+/// [`parse_local_with`].
+pub type KnownNames<'a> = &'a dyn Fn(&str) -> bool;
+
+/// No workbook names: only LET/LAMBDA bindings take precedence over localized names.
+pub fn no_names(_: &str) -> bool {
+    false
+}
+
+/// [`parse_local`] where the names `known` reports (and LET/LAMBDA bindings in scope) take
+/// precedence over the dialect's function names and booleans: with a name `SUMA` defined, Spanish
+/// `SUMA(2)` calls that name, not `SUM`, and `FALSO` reads a name `FALSO`, not `FALSE`.
+/// The canonical `TRUE` and `FALSE` are never names.
+pub fn parse_local_with(src: &str, d: &Dialect, known: KnownNames<'_>) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     let toks = tokenize_local(body, d).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, d };
+    let mut p = Parser { toks, i: 0, depth: 0, d, src: body, known, bindings: Vec::new() };
     let e = p.expr(0, false)?;
     match p.peek() {
         Tok::Eof => Ok(e),
         t => Err(p.err(format!("unexpected {}", describe(t)))),
+    }
+}
+
+/// Whether a local boolean spelling can also be a name: every one but the canonical `TRUE` and
+/// `FALSE`, which Excel reserves.
+pub(crate) fn bindable_bool(word: &str) -> bool {
+    !word.eq_ignore_ascii_case("TRUE") && !word.eq_ignore_ascii_case("FALSE")
+}
+
+/// Whether `name` is bound by a LET/LAMBDA in `bindings` or is a name `known` reports. Bindings
+/// compare in ASCII case, like the evaluator.
+pub(crate) fn is_bound(name: &str, bindings: &[String], known: KnownNames<'_>) -> bool {
+    bindings.iter().rev().any(|n| n.eq_ignore_ascii_case(name)) || known(name)
+}
+
+/// The name argument `i` of LET or LAMBDA binds for the arguments after it, when `more` follow
+/// (the parser and the printer must agree): a LAMBDA parameter binds from the next argument on;
+/// a LET name binds once its value has been read, so `LET(x, x, …)` reads the outer `x` in the
+/// value.
+pub(crate) fn binds_after<'e>(function: &str, args: &'e [Expr], i: usize, more: bool) -> Option<&'e str> {
+    if !more {
+        return None;
+    }
+    let decl = match function {
+        "LAMBDA" => args.get(i),
+        "LET" if i % 2 == 1 => args.get(i - 1),
+        _ => None,
+    };
+    match decl {
+        Some(Expr::Name(n)) => Some(n),
+        _ => None,
+    }
+}
+
+/// Whether argument `i` of LET or LAMBDA (with more arguments after it) declares a name.
+fn declares(function: &str, i: usize) -> bool {
+    match function {
+        "LAMBDA" => true,
+        "LET" => i.is_multiple_of(2),
+        _ => false,
     }
 }
 
@@ -70,6 +127,11 @@ struct Parser<'a> {
     i: usize,
     depth: usize,
     d: &'a Dialect<'a>,
+    /// The formula body the token spans point into.
+    src: &'a str,
+    known: KnownNames<'a>,
+    /// Names bound by the LET/LAMBDA calls being read, innermost last.
+    bindings: Vec<String>,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -161,6 +223,13 @@ impl Parser<'_> {
     fn err(&self, msg: impl Into<String>) -> ParseError {
         ParseError { msg: msg.into(), pos: self.pos() }
     }
+    /// Source text of the token just consumed.
+    fn last_text(&self) -> &str {
+        self.i.checked_sub(1).and_then(|k| self.toks.get(k)).and_then(|t| self.src.get(t.start..t.end)).unwrap_or("")
+    }
+    fn bound(&self, name: &str) -> bool {
+        is_bound(name, &self.bindings, self.known)
+    }
     fn expect(&mut self, t: Tok) -> Result<(), ParseError> {
         if *self.peek() == t {
             self.next();
@@ -212,7 +281,7 @@ impl Parser<'_> {
                     // A name followed by '(' was lexed as Func; this is `(name)(…)` only.
                 }
                 self.next();
-                let args = self.args()?;
+                let args = self.args("")?;
                 lhs = Expr::Invoke(Box::new(lhs), args);
                 continue;
             }
@@ -229,24 +298,41 @@ impl Parser<'_> {
         Ok(lhs)
     }
 
-    fn args(&mut self) -> Result<Vec<Expr>, ParseError> {
+    /// The arguments of a call to `function` (canonical name), after its `(`. LET and LAMBDA
+    /// bind their names for the arguments after them (see [`binds_after`]).
+    fn args(&mut self, function: &str) -> Result<Vec<Expr>, ParseError> {
         let mut args = Vec::new();
         if *self.peek() == Tok::RParen {
             self.next();
             return Ok(args);
         }
+        let saved = self.bindings.len();
         loop {
-            let a = match self.peek() {
+            let start = self.i;
+            let mut a = match self.peek() {
                 Tok::Comma | Tok::RParen => Expr::Missing,
                 _ => self.expr(0, false)?,
             };
+            let more = *self.peek() == Tok::Comma;
+            // A declared name spelled like a local boolean: `LET(FALSO; 7; FALSO)` in Spanish.
+            if more && declares(function, args.len()) && matches!(a, Expr::Bool(_)) && self.i == start + 1 {
+                let text = self.toks.get(start).and_then(|t| self.src.get(t.start..t.end)).unwrap_or("");
+                if bindable_bool(text) {
+                    a = Expr::Name(text.to_string());
+                }
+            }
             args.push(a);
+            if more && let Some(n) = binds_after(function, &args, args.len() - 1, true) {
+                let n = n.to_string();
+                self.bindings.push(n);
+            }
             match self.next() {
                 Tok::Comma => continue,
                 Tok::RParen => break,
                 t => return Err(self.err(format!("expected `,` or `)`, found {}", describe(&t)))),
             }
         }
+        self.bindings.truncate(saved);
         if args.len() > 255 {
             return Err(self.err("too many arguments"));
         }
@@ -257,7 +343,10 @@ impl Parser<'_> {
         match self.next() {
             Tok::Number(n) => Ok(Expr::Number(n)),
             Tok::Text(s) => Ok(Expr::Text(Arc::from(s))),
-            Tok::Bool(b) => Ok(Expr::Bool(b)),
+            Tok::Bool(b) => {
+                let text = self.last_text();
+                Ok(if bindable_bool(text) && self.bound(text) { Expr::Name(text.to_string()) } else { Expr::Bool(b) })
+            }
             Tok::Error(e) => Ok(Expr::Error(e)),
             Tok::Op("-") => Ok(Expr::Unary(UnOp::Neg, Box::new(self.expr(60, allow_union)?))),
             Tok::Op("+") => Ok(Expr::Unary(UnOp::Plus, Box::new(self.expr(60, allow_union)?))),
@@ -268,9 +357,10 @@ impl Parser<'_> {
                 Ok(Expr::Paren(Box::new(e)))
             }
             Tok::LBrace => self.array(),
-            Tok::Func(name) => {
-                let name = resolve_function(&name, self.d);
-                let mut args = self.args()?;
+            Tok::Func(raw) => {
+                // A bound name is called as written (ASCII upper case, like other user names).
+                let name = if self.bound(&raw) { raw.to_ascii_uppercase() } else { resolve_function(&raw, self.d) };
+                let mut args = self.args(&name)?;
                 // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`; the name is not localized.
                 if matches!(name.as_str(), "ANCHORARRAY" | "_XLFN.ANCHORARRAY")
                     && let [Expr::Ref(Reference { kind: RefKind::Cell(_), .. })] = args.as_slice()

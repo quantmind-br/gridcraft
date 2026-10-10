@@ -67,7 +67,10 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "sheets": sheets,
         "selection": d.selection.a1(),
         "activeCell": d.selection.active.a1(),
-        "names": wb.names.iter().map(|n| json!({"name": n.name, "refersTo": format!("={}", n.formula), "refersToLocal": format!("={}", crate::locale::to_local_body(&n.formula, &wb.locale.dialect())), "scope": n.scope})).collect::<Vec<_>>(),
+        "names": wb.names.iter().map(|n| {
+            let local = crate::locale::to_local_body(&n.formula, &wb.locale.dialect(), &|x: &str| wb.knows_name(x, n.scope.unwrap_or(wb.active_sheet)));
+            json!({"name": n.name, "refersTo": format!("={}", n.formula), "refersToLocal": format!("={local}"), "scope": n.scope})
+        }).collect::<Vec<_>>(),
         "calcMode": format!("{:?}", wb.calc.mode),
         "undo": d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect::<Vec<_>>(),
         "redo": d.redo.iter().rev().take(20).map(|e| e.label.clone()).collect::<Vec<_>>(),
@@ -108,7 +111,11 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
                 && !crate::display::formula_hidden(&d.wb, sh, c)
             {
                 let canonical = format!("={}", f.text);
-                json!(if local { crate::locale::to_local_formula(&canonical, &d.wb.locale.dialect()) } else { canonical })
+                json!(if local {
+                    crate::locale::to_local_formula(&canonical, &d.wb.locale.dialect(), &|n: &str| d.wb.knows_name(n, sheet))
+                } else {
+                    canonical
+                })
             } else if formatted {
                 json!(crate::display::cell_text(&d.wb, sh, c))
             } else {
@@ -131,18 +138,20 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
     let loc = &d.wb.locale;
     // A hidden formula on a protected sheet is not shown in any spelling.
     let hidden = crate::display::formula_hidden(&d.wb, sh, c);
+    let known = |n: &str| d.wb.knows_name(n, sheet);
     let formula = cell.and_then(|x| x.formula.as_ref()).filter(|_| !hidden).map(|f| format!("={}", f.text));
     Ok(json!({
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
-        "type": match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" },
+        "type": if sh.cell_pictures.contains_key(&c) { "picture" } else { match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" } },
         "formula": formula,
-        "formulaLocal": formula.as_deref().map(|f| crate::locale::to_local_formula(f, &loc.dialect())),
+        "formulaLocal": formula.as_deref().map(|f| crate::locale::to_local_formula(f, &loc.dialect(), &known)),
         "numberFormat": style.num_fmt.as_str(),
         "numberFormatLocal": crate::locale::to_local_format(style.num_fmt.as_str(), &loc.dialect()),
         "text": crate::display::cell_text(&d.wb, sh, c),
-        "input": cell.map(|x| if hidden { sh.value(c).display() } else { x.input_text() }).unwrap_or_default(),
-        "inputLocal": cell.map(|x| if hidden { crate::locale::value_local(&sh.value(c), loc) } else { crate::locale::input_local(x, loc) }).unwrap_or_default(),
+        "input": if hidden { sh.value(c).display() } else { sh.input_text(c) },
+        "inputLocal": if hidden { crate::locale::value_local(&sh.value(c), loc) } else { crate::locale::sheet_input_local(sh, c, loc, &known) },
+        "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),
         "spilledFrom": sh.spill_ranges.iter().find(|(a, r)| **a != c && r.contains(c)).map(|(a, _)| a.a1()),
         "spill": sh.spill_ranges.get(&c).map(|r| r.a1()),
         "style": style,

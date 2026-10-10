@@ -118,12 +118,15 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
     let text = match range {
         Some(r) => format!("={func}({})", r.a1()),
         None => {
-            s.ui_requests.push(crate::UiRequest::EditCell(Some(crate::locale::to_local_formula(&format!("={func}()"), &s.locale().dialect()))));
+            let local =
+                crate::locale::to_local_formula(&format!("={func}()"), &s.locale().dialect(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
+            s.ui_requests.push(crate::UiRequest::EditCell(Some(local)));
             return ok();
         }
     };
     if p.get("enter").and_then(Json::as_bool) == Some(false) {
-        s.ui_requests.push(crate::UiRequest::EditCell(Some(crate::locale::to_local_formula(&text, &s.locale().dialect()))));
+        let local = crate::locale::to_local_formula(&text, &s.locale().dialect(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
+        s.ui_requests.push(crate::UiRequest::EditCell(Some(local)));
         return Ok(json!({"formula": text}));
     }
     s.execute("cell.set", json!({"cell": at.a1(), "input": text}))?;
@@ -133,10 +136,15 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
 fn insert_function(s: &mut Session, p: &Json) -> Result<Json> {
     match str_param(p, "name") {
         Some(n) => {
-            let loc = s.locale();
-            let upper = n.to_ascii_uppercase();
-            let local = loc.formula.local_function(&upper).map(str::to_string).unwrap_or(upper);
-            s.ui_requests.push(crate::UiRequest::EditCell(Some(format!("={local}("))));
+            // Spelled through an empty call so a workbook name with the function's local
+            // spelling keeps it reading as the function (`=_xlfn.SUM(`).
+            let call = format!("={}()", n.to_ascii_uppercase());
+            let local = match s.doc() {
+                Ok(d) => crate::locale::to_local_formula(&call, &s.locale().dialect(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet)),
+                Err(_) => crate::locale::to_local_formula(&call, &s.locale().dialect(), &gridcraft_formula::no_names),
+            };
+            let text = local.strip_suffix(')').unwrap_or(&local).to_string();
+            s.ui_requests.push(crate::UiRequest::EditCell(Some(text)));
             ok()
         }
         None => {
@@ -235,7 +243,9 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         Some(sh) => Some(d.wb.sheet_index(sh).ok_or_else(|| bad("formulas.defineName", "no such sheet"))?),
     };
     let call_loc = crate::locale::call_locale(s, p)?;
-    let refers = match crate::locale::canonical_formula_param(p, "refersTo", &call_loc)? {
+    // The name being defined is not known yet: `SUMA` refers to SUM until it exists.
+    let known = |n: &str| d.wb.knows_name(n, scope.unwrap_or(d.wb.active_sheet));
+    let refers = match crate::locale::canonical_formula_param(p, "refersTo", &call_loc, &known)? {
         Some(r) => r.trim_start_matches('=').to_string(),
         None => {
             let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
@@ -249,11 +259,12 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("There's a problem with this formula.".into()));
     }
     let comment = str_param(p, "comment").unwrap_or("").to_string();
+    let sheet = scope.unwrap_or(d.wb.active_sheet);
     edit(s, |cx| {
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
         cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
         cx.structural = true;
-        let local = crate::locale::to_local_body(&refers, &call_loc.dialect());
+        let local = crate::locale::to_local_body(&refers, &call_loc.dialect(), &|n: &str| cx.wb.knows_name(n, sheet));
         Ok(json!({"name": name, "refersTo": format!("={refers}"), "refersToLocal": format!("={local}")}))
     })
 }
@@ -286,7 +297,8 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .map(|n| {
             let sheet = n.scope.unwrap_or(d.wb.active_sheet);
             let v = gridcraft_calc::evaluate(&d.wb, sheet, CellRef::default(), &n.formula);
-            json!({"name": n.name, "refersTo": format!("={}", n.formula), "refersToLocal": format!("={}", crate::locale::to_local_body(&n.formula, &d.wb.locale.dialect())), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "valueLocal": crate::locale::value_local(&v, &d.wb.locale), "comment": n.comment})
+            let local = crate::locale::to_local_body(&n.formula, &d.wb.locale.dialect(), &|x: &str| d.wb.knows_name(x, sheet));
+            json!({"name": n.name, "refersTo": format!("={}", n.formula), "refersToLocal": format!("={local}"), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "valueLocal": crate::locale::value_local(&v, &d.wb.locale), "comment": n.comment})
         })
         .collect();
     Ok(Json::Array(list))
@@ -390,11 +402,12 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
     let loc = &d.wb.locale;
     let dialect = loc.dialect();
     let mut out = Vec::new();
-    for sh in &d.wb.sheets {
+    for (si, sh) in d.wb.sheets.iter().enumerate() {
+        let known = |n: &str| d.wb.knows_name(n, si);
         for (c, cell) in sh.cells.iter() {
             if let Some(e) = cell.value.as_error() {
                 let formula = cell.formula.as_ref().filter(|_| !crate::display::formula_hidden(&d.wb, sh, c)).map(|f| format!("={}", f.text));
-                let formula_local = formula.as_deref().map(|f| crate::locale::to_local_formula(f, &dialect));
+                let formula_local = formula.as_deref().map(|f| crate::locale::to_local_formula(f, &dialect, &known));
                 out.push(json!({
                     "sheet": sh.name,
                     "cell": c.a1(),
@@ -419,7 +432,8 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(p, "cell").unwrap_or(d.selection.active);
     let sheet = d.wb.active_sheet;
-    let text = match crate::locale::canonical_formula_param(p, "formula", &loc)? {
+    let known = |n: &str| d.wb.knows_name(n, sheet);
+    let text = match crate::locale::canonical_formula_param(p, "formula", &loc, &known)? {
         Some(f) => f.trim_start_matches('=').to_string(),
         None => {
             let sh = d.wb.sheet(sheet);
@@ -446,7 +460,7 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
         let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &e);
         steps.push(json!({
             "expression": gridcraft_formula::print(&e),
-            "expressionLocal": gridcraft_formula::print_local(&e, &dialect),
+            "expressionLocal": gridcraft_formula::print_local_with(&e, &dialect, &known),
             "value": crate::cmd::inspect::value_json(&v),
             "valueLocal": crate::locale::value_local(&v, &loc),
         }));
@@ -454,7 +468,7 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let result = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &expr);
     Ok(json!({
         "formula": format!("={text}"),
-        "formulaLocal": format!("={}", gridcraft_formula::print_local(&expr, &dialect)),
+        "formulaLocal": format!("={}", gridcraft_formula::print_local_with(&expr, &dialect, &known)),
         "steps": steps,
         "result": crate::cmd::inspect::value_json(&result),
         "resultLocal": crate::locale::value_local(&result, &loc),
@@ -463,9 +477,9 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let loc = crate::locale::call_locale(s, p)?;
-    let f =
-        crate::locale::canonical_formula_param(p, "formula", &loc)?.ok_or_else(|| bad("formulas.evaluate", "missing `formula` or `formulaLocal`"))?;
     let d = s.doc()?;
+    let f = crate::locale::canonical_formula_param(p, "formula", &loc, &|n: &str| d.wb.knows_name(n, d.wb.active_sheet))?
+        .ok_or_else(|| bad("formulas.evaluate", "missing `formula` or `formulaLocal`"))?;
     let at = cell_param(p, "cell").unwrap_or(d.selection.active);
     let v = gridcraft_calc::evaluate(&d.wb, d.wb.active_sheet, at, &f);
     Ok(crate::cmd::inspect::value_json(&v))

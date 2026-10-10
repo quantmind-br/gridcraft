@@ -392,7 +392,7 @@ impl Session {
             }
         };
         if spec.journal && result.is_ok() {
-            let recorded = crate::locale::canonical_journal(self, id, &params);
+            let recorded = crate::locale::canonical_journal(self, id, &params, before.as_ref().map(|(_, wb, _)| &**wb));
             self.journal.extend(recorded);
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);

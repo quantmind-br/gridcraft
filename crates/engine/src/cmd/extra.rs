@@ -879,7 +879,7 @@ fn checkbox(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(si)?;
                 let v = sh.value(c);
                 let value = if matches!(v, Value::Bool(_)) { v } else { Value::Bool(false) };
-                sh.cells.set(c, Cell { value, formula: None, style: new });
+                sh.set_cell(c, Cell { value, formula: None, style: new });
                 cx.touch(si, c);
             }
         }
@@ -1031,7 +1031,7 @@ fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
                 "value": sh.map(|s| s.value(c).display()),
                 "formula": formula,
                 "text": sh.map(|s| crate::display::cell_text(&d.wb, s, c)),
-                "formulaLocal": formula.as_deref().map(|f| crate::locale::to_local_formula(f, &d.wb.locale.dialect())),
+                "formulaLocal": formula.as_deref().map(|f| crate::locale::to_local_formula(f, &d.wb.locale.dialect(), &|n: &str| d.wb.knows_name(n, si))),
             })
         })
         .collect();

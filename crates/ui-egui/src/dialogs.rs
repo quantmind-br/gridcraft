@@ -52,6 +52,8 @@ pub struct Dialog {
     pub search: String,
     pub list_index: usize,
     pub result: Option<Json>,
+    picture_inbox: Option<crate::Inbox>,
+    picture_target: Option<(u64, usize)>,
 }
 
 impl Dialog {
@@ -70,6 +72,8 @@ impl Dialog {
             search: String::new(),
             list_index: 0,
             result: None,
+            picture_inbox: None,
+            picture_target: None,
         }
     }
 
@@ -84,6 +88,8 @@ impl Dialog {
             search: String::new(),
             list_index: 0,
             result: None,
+            picture_inbox: None,
+            picture_target: None,
         }
     }
 
@@ -601,7 +607,18 @@ impl Dialog {
                 ],
                 json!({"chart": p("chart")}),
             ),
-            "insertPicture" => Dialog::custom("insertPicture", msg!("Insert Picture"), json!({"path": ""})),
+            "insertPicture" => {
+                let placement = params.get("placement").and_then(Json::as_str).unwrap_or("overCells");
+                let mut dialog = Dialog::form(
+                    "insertPicture",
+                    if placement == "cell" { msg!("Place Picture in Cell") } else { msg!("Place Picture over Cells") },
+                    "insert.picture",
+                    vec![],
+                    json!({"path": "", "placement": placement, "at": active}),
+                );
+                dialog.picture_target = app.view_key();
+                dialog
+            }
             "pickList" => Dialog::custom("pickList", msg!("Pick From List"), json!({})),
             "saveCopy" => Dialog::custom("saveCopy", msg!("Save a Copy"), json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", msg!("Save Changes?"), json!({"title": p("title")})),
@@ -762,14 +779,15 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
         _ => 380.0,
     };
-    egui::Window::new(l.tr(&d.title).into_owned())
+    let window = egui::Window::new(l.tr(&d.title).into_owned())
         .id(egui::Id::new("dialog").with(&d.name))
         .collapsible(false)
         .resizable(false)
         .default_width(width)
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0))
-        .open(&mut win_open)
-        .show(ctx, |ui| {
+        .open(&mut win_open);
+    let window = if d.name == "insertPicture" { window.default_height(240.0) } else { window };
+    window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -825,20 +843,57 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                 }
                 "insertPicture" => {
-                    ui.label(&*l.tr("Picture file path (PNG or JPEG):"));
-                    let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
-                    ui.text_edit_singleline(&mut path);
-                    d.values.insert("path".into(), json!(path));
-                    if let Some(pick) = &app.services.pick_open
-                        && ui.button(&*l.tr("Browse…")).clicked()
-                        && let Some(p) = pick()
-                    {
-                        d.values.insert("path".into(), json!(p));
+                    // A private inbox dies with this dialog; late browser results
+                    // cannot affect a later picture choice or another workbook.
+                    let arrived = d.picture_inbox.as_ref().and_then(|inbox| {
+                        inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop()
+                    });
+                    if let Some((name, bytes)) = arrived {
+                        d.picture_inbox = None;
+                        if bytes.len() > 16 * 1024 * 1024 {
+                            app.message = Some((l.tr(&d.title).into_owned(), l.tr("Choose a PNG or JPEG no larger than 16 MB.").into_owned()));
+                        } else {
+                            d.values.remove("path");
+                            d.values.insert("alt".into(), json!(name));
+                            d.values.insert("base64".into(), json!(gridcraft_engine::io::base64_encode(&bytes)));
+                        }
+                    }
+                    if app.services.pick_picture_async.is_some() {
+                        match d.values.get("alt").and_then(Json::as_str) {
+                            Some(name) => ui.label(name),
+                            None => ui.label(&*l.tr("No picture selected")),
+                        };
+                    } else {
+                        ui.label(&*l.tr("Picture file path (PNG or JPEG):"));
+                        let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+                        if ui.text_edit_singleline(&mut path).changed() {
+                            d.values.remove("base64");
+                            d.values.insert("path".into(), json!(path));
+                        }
+                    }
+                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button(&*l.tr("Browse…")).clicked() {
+                        if let Some(start) = &app.services.pick_picture_async {
+                            let inbox = crate::Inbox::default();
+                            start(inbox.clone());
+                            d.picture_inbox = Some(inbox);
+                        } else if let Some(pick) = &app.services.pick_picture
+                            && let Some(path) = pick()
+                        {
+                            d.values.remove("base64");
+                            let alt = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or("");
+                            d.values.insert("alt".into(), json!(alt));
+                            d.values.insert("path".into(), json!(path));
+                        }
+                    }
+                    ui.label(&*l.tr("Description (optional):"));
+                    let mut alt = d.values.get("alt").and_then(Json::as_str).unwrap_or("").to_string();
+                    if ui.text_edit_singleline(&mut alt).changed() {
+                        d.values.insert("alt".into(), json!(alt));
+                    }
+                    if d.values.get("placement").and_then(Json::as_str) == Some("cell") {
+                        ui.label(egui::RichText::new(l.tr("Fits inside the selected cell and moves with its content.")).small());
                     }
                     ok_cancel(ui, l, &mut confirm, &mut open);
-                    if confirm {
-                        app.run_or_alert("insert.picture", json!({"path": d.values.get("path")}));
-                    }
                 }
                 "pickList" => {
                     for it in pick_list_items(app) {
@@ -945,6 +1000,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
         open = false;
+    }
+    if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
+        let text = l.tr("Return to the original worksheet to insert this picture, or cancel and choose another cell.").into_owned();
+        app.message = Some((l.tr(&d.title).into_owned(), text));
+        confirm = false;
     }
     if confirm && let Some(cmd) = d.command {
         let result = build_params(&d, app).and_then(|p| app.run_typed(cmd, p).map_err(|e| app.error_text(&e)));

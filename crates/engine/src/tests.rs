@@ -1120,10 +1120,38 @@ fn error_codes_are_stable() {
 fn formula_text_round_trips_through_the_region_dialect() {
     let region = gridcraft_locale::region("de-DE").unwrap();
     let d = gridcraft_locale::Dialect { names: gridcraft_locale::language("en-US").unwrap(), regional: region };
-    let local = crate::locale::to_local_formula("=SUM(1.5,A1)", &d);
+    let local = crate::locale::to_local_formula("=SUM(1.5,A1)", &d, &gridcraft_formula::no_names);
     assert_eq!(local, "=SUM(1,5;A1)");
-    assert_eq!(crate::locale::from_local_formula(&local, &d).unwrap(), "=SUM(1.5,A1)");
-    assert!(crate::locale::from_local_formula("=1+*2", &d).is_err());
+    assert_eq!(crate::locale::from_local_formula(&local, &d, &gridcraft_formula::no_names).unwrap(), "=SUM(1.5,A1)");
+    assert!(crate::locale::from_local_formula("=1+*2", &d, &gridcraft_formula::no_names).is_err());
+}
+
+#[test]
+fn workbook_names_win_over_local_function_names_and_booleans() {
+    let mut s = s();
+    set_locale(&mut s, json!({"formulaLanguage": "es-ES", "regionalFormat": "es-ES"}));
+    // A name's own definition reads before the name exists (`SUMA` is SUM there), and the
+    // journal replays it that way although the name exists once the command has run.
+    s.execute("formulas.defineName", json!({"name": "SUMA", "refersToLocal": "=SUMA(1;2)"})).unwrap();
+    assert_eq!(s.journal.last().map(|(_, p)| p["refersTo"].clone()), Some(json!("=SUM(1,2)")));
+    s.execute("cell.set", json!({"cell": "C1", "input": "7"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "FALSO", "refersTo": "=Sheet1!$C$1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "inputLocal": "=FALSO+SUMA+VERDADERO"})).unwrap();
+    assert_eq!(s.journal.last().map(|(_, p)| p["input"].clone()), Some(json!("=FALSO+SUMA+TRUE")));
+    let r = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+    assert_eq!(r["formulaLocal"], "=FALSO+SUMA+VERDADERO");
+    assert_eq!(v(&s, "A1"), Value::Number(11.0));
+    // A built-in spelled like a name is written so it still reads as the built-in.
+    s.execute("cell.set", json!({"cell": "A2", "input": "=SUM(1,FALSE)"})).unwrap();
+    let shown = s.execute("cell.get", json!({"cell": "A2"})).unwrap()["formulaLocal"].clone();
+    assert_eq!(shown, "=_xlfn.SUM(1;_xlfn.FALSE())");
+    s.execute("cell.set", json!({"cell": "A3", "inputLocal": shown})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::Number(1.0));
+    // FORMULATEXT and INDIRECT read and write with the same names.
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::text("=FALSO+SUMA+VERDADERO"));
+    s.execute("cell.set", json!({"cell": "B2", "input": "=INDIRECT(\"FALSO\")"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(7.0));
 }
 
 #[test]
@@ -1304,7 +1332,7 @@ fn formula_length_is_capped() {
     assert_eq!(s.execute("cell.set", json!({"cell": "A1", "inputLocal": long})).unwrap_err().code(), "invalid-formula");
     assert!(s.execute("formulas.evaluate", json!({"formulaLocal": long})).is_err());
     let d = gridcraft_locale::INVARIANT.dialect();
-    assert!(crate::locale::from_local_formula(&long, &d).is_err());
+    assert!(crate::locale::from_local_formula(&long, &d, &gridcraft_formula::no_names).is_err());
     assert!(s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).is_ok());
 }
 
@@ -1980,4 +2008,184 @@ fn chart_display_labels_follow_locale_without_changing_series_formulas() {
     let resolved = gridcraft_chart::resolve(&d.wb, 0, &chart);
     assert_eq!(resolved.categories, vec!["1,5", "2,5"]);
     assert_eq!(chart.series[0].values, "Planilha1!$B$2:$B$3");
+}
+
+fn original_cell_picture() -> Vec<u8> {
+    let image = image::RgbaImage::from_fn(4, 2, |x, _| if x < 2 { image::Rgba([240, 60, 40, 255]) } else { image::Rgba([20, 100, 240, 128]) });
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(image).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+fn insert_cell_picture(s: &mut Session, at: &str, alt: &str) {
+    s.execute("insert.picture", json!({"placement": "cell", "at": at, "base64": crate::io::base64_encode(&original_cell_picture()), "alt": alt}))
+        .unwrap();
+}
+
+fn cell_picture(s: &Session, at: &str) -> Option<std::sync::Arc<gridcraft_model::CellPicture>> {
+    s.doc().unwrap().wb.active().unwrap().cell_pictures.get(&CellRef::parse(at).unwrap()).cloned()
+}
+
+#[test]
+fn cell_picture_insert_validates_content_preserves_style_and_replaces_with_undo() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B2", "input": "old"})).unwrap();
+    s.execute("home.bold", json!({"range": "B2"})).unwrap();
+    for bytes in [b"not an image".as_slice(), b"GIF89a", &original_cell_picture()[..24]] {
+        assert!(s.execute("insert.picture", json!({"placement": "cell", "at": "B2", "base64": crate::io::base64_encode(bytes)})).is_err());
+        assert_eq!(v(&s, "B2"), Value::from("old"));
+    }
+    insert_cell_picture(&mut s, "B2", "Original picture");
+    assert_eq!(v(&s, "B2"), Value::Error(gridcraft_core::CellError::Value));
+    let state = s.execute("cell.get", json!({"cell": "B2"})).unwrap();
+    assert_eq!(state["type"], "picture");
+    assert_eq!(state["text"], "#VALUE!");
+    assert_eq!(state["input"], "");
+    assert_eq!(state["picture"]["alt"], "Original picture");
+    assert!(state["picture"].get("data").is_none());
+    assert_eq!(state["style"]["font"]["bold"], true);
+    assert!(s.doc().unwrap().wb.active().unwrap().images.is_empty());
+    s.execute("cell.set", json!({"cell": "B2", "input": "=2+3"})).unwrap();
+    assert!(cell_picture(&s, "B2").is_none());
+    assert_eq!(v(&s, "B2"), Value::Number(5.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(cell_picture(&s, "B2").unwrap().alt, "Original picture");
+    s.execute("range.setValues", json!({"range": "B2", "values": [[7]]})).unwrap();
+    assert!(cell_picture(&s, "B2").is_none());
+    let mut jpeg = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2, 1, image::Rgb([60, 80, 100])))
+        .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+        .unwrap();
+    s.execute("insert.picture", json!({"placement": "cell", "at": "D2", "base64": crate::io::base64_encode(&jpeg), "mime": "wrong/client-mime"}))
+        .unwrap();
+    assert_eq!(cell_picture(&s, "D2").unwrap().mime, "image/jpeg");
+}
+
+#[test]
+fn cell_picture_clipboard_clear_and_structural_edits_keep_complete_payload() {
+    let mut s = s();
+    insert_cell_picture(&mut s, "B2", "moves with the row");
+    let original = cell_picture(&s, "B2").unwrap();
+    s.execute("edit.copy", json!({"range": "B2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "D2"})).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&original, &cell_picture(&s, "D2").unwrap()));
+    s.execute("home.bold", json!({"range": "C1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "C1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "at": "D2"})).unwrap();
+    assert_eq!(cell_picture(&s, "D2").unwrap().alt, original.alt);
+    s.execute("edit.clearFormats", json!({"range": "D2"})).unwrap();
+    assert!(cell_picture(&s, "D2").is_some());
+    s.execute("edit.clearContents", json!({"range": "D2"})).unwrap();
+    assert!(cell_picture(&s, "D2").is_none());
+    s.execute("cell.set", json!({"cell": "C1", "input": "3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "B2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "C1", "operation": "add"})).unwrap();
+    assert!(cell_picture(&s, "C1").is_none());
+    assert_eq!(v(&s, "C1"), Value::Error(gridcraft_core::CellError::Value));
+    s.execute("home.insertRows", json!({"rows": "2:2"})).unwrap();
+    s.execute("home.insertColumns", json!({"cols": "B:B"})).unwrap();
+    assert_eq!(cell_picture(&s, "C3").unwrap().alt, original.alt);
+    s.execute("edit.cut", json!({"range": "C3"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+    s.execute("edit.paste", json!({"at": "E4"})).unwrap();
+    assert_eq!(cell_picture(&s, "E4").unwrap().alt, original.alt);
+    assert!(s.doc().unwrap().wb.sheet(0).unwrap().cell(CellRef::parse("C3").unwrap()).is_none());
+    s.execute("home.deleteColumns", json!({"cols": "E:E"})).unwrap();
+    assert!(cell_picture(&s, "E4").is_none());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(cell_picture(&s, "E4").unwrap().data, original.data);
+}
+
+#[test]
+fn cell_picture_follows_sort_filter_and_blocks_formula_spills() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Rank", "Picture"], [2], [1]]})).unwrap();
+    insert_cell_picture(&mut s, "B2", "rank two");
+    insert_cell_picture(&mut s, "B3", "rank one");
+    s.execute("data.sort", json!({"range": "A1:B3", "header": true, "keys": [{"column": "A", "order": "asc"}]})).unwrap();
+    assert_eq!(cell_picture(&s, "B2").unwrap().alt, "rank one");
+    assert_eq!(cell_picture(&s, "B3").unwrap().alt, "rank two");
+    s.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1"]})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2));
+    assert!(cell_picture(&s, "B3").is_some());
+    insert_cell_picture(&mut s, "D2", "spill obstruction");
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(2)"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Error(gridcraft_core::CellError::Spill));
+    s.execute("edit.clearContents", json!({"range": "D2"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Number(1.0));
+    assert_eq!(v(&s, "D2"), Value::Number(2.0));
+}
+
+#[test]
+fn cell_picture_json_save_retains_content_and_pdf_draws_without_error_text() {
+    let mut s = s();
+    insert_cell_picture(&mut s, "B2", "original pixels");
+    let saved = s.execute("file.saveBytes", json!({"format": "json"})).unwrap();
+    s.execute("file.open", json!({"name": "pictures.json", "base64": saved["base64"]})).unwrap();
+    assert_eq!(cell_picture(&s, "B2").unwrap().data, original_cell_picture());
+    let pdf = s.execute("file.exportPdf", json!({"range": "A1:C3"})).unwrap();
+    let data = crate::io::base64_decode(pdf["base64"].as_str().unwrap()).unwrap();
+    let pdf_text = String::from_utf8_lossy(&data);
+    assert!(pdf_text.contains("/Subtype /Image"));
+    assert!(!pdf_text.contains("(#VALUE!) Tj"));
+    s.execute("home.hideRows", json!({"rows": "2:2"})).unwrap();
+    let pdf = s.execute("file.exportPdf", json!({"range": "A1:C3"})).unwrap();
+    let data = crate::io::base64_decode(pdf["base64"].as_str().unwrap()).unwrap();
+    assert!(!String::from_utf8_lossy(&data).contains("/Subtype /Image"));
+}
+
+#[test]
+fn cell_picture_side_map_follows_fill_shift_merge_and_undo() {
+    let mut s = s();
+    insert_cell_picture(&mut s, "B2", "shared pixels");
+    let original = cell_picture(&s, "B2").unwrap();
+    s.execute("edit.fillDown", json!({"range": "B2:B4"})).unwrap();
+    for at in ["B2", "B3", "B4"] {
+        assert!(std::sync::Arc::ptr_eq(&original, &cell_picture(&s, at).unwrap()));
+    }
+    s.execute("edit.autoFill", json!({"source": "A2", "target": "A2:B2", "mode": "formats"})).unwrap();
+    assert!(cell_picture(&s, "B2").is_some());
+    s.execute("edit.autoFill", json!({"source": "A3", "target": "A3:B3", "mode": "copy"})).unwrap();
+    assert!(cell_picture(&s, "B3").is_none());
+    s.execute("home.insertCells", json!({"range": "B2", "shift": "down"})).unwrap();
+    assert!(cell_picture(&s, "B2").is_none());
+    assert!(cell_picture(&s, "B3").is_some());
+    assert!(cell_picture(&s, "B5").is_some());
+    s.execute("home.deleteCells", json!({"range": "B3", "shift": "up"})).unwrap();
+    assert!(cell_picture(&s, "B3").is_none());
+    assert!(cell_picture(&s, "B4").is_some());
+    s.execute("home.mergeCells", json!({"range": "A4:B4"})).unwrap();
+    assert!(cell_picture(&s, "B4").is_none());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(cell_picture(&s, "B4").is_some());
+    s.execute("edit.clearAll", json!({"range": "A1:C5"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().cell_pictures.is_empty());
+    insert_cell_picture(&mut s, "XFD1048576", "grid edge");
+    assert!(s.execute("home.insertRows", json!({"rows": "1048576:1048576"})).is_err());
+    assert_eq!(cell_picture(&s, "XFD1048576").unwrap().alt, "grid edge");
+}
+
+#[test]
+fn cell_picture_cut_uses_live_source_after_edit() {
+    for clear in [false, true] {
+        let mut s = s();
+        insert_cell_picture(&mut s, "B2", "original");
+        s.execute("edit.cut", json!({"range": "B2"})).unwrap();
+        if clear {
+            s.execute("edit.clearContents", json!({"range": "B2"})).unwrap();
+        } else {
+            insert_cell_picture(&mut s, "B2", "replacement");
+        }
+        s.execute("edit.paste", json!({"at": "D2"})).unwrap();
+        assert!(cell_picture(&s, "B2").is_none());
+        if clear {
+            assert!(cell_picture(&s, "D2").is_none());
+            assert_eq!(v(&s, "D2"), Value::Empty);
+        } else {
+            assert_eq!(cell_picture(&s, "D2").unwrap().alt, "replacement");
+            assert_eq!(v(&s, "D2"), Value::Error(gridcraft_core::CellError::Value));
+        }
+    }
 }

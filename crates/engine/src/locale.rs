@@ -7,10 +7,10 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::Value;
-use gridcraft_formula::{Expr, ParseError};
+use gridcraft_core::{CellRef, Value};
+use gridcraft_formula::{Expr, KnownNames, ParseError};
 use gridcraft_locale::{DateOrder, Dialect, Locale, Regional};
-use gridcraft_model::Cell;
+use gridcraft_model::{Cell, Workbook};
 use serde_json::{Value as Json, json};
 
 use crate::{EngineError, Prefs, Result, Session, UiRequest};
@@ -33,54 +33,54 @@ pub fn check_formula_len(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Parses a formula body (no leading `=`) in `d`. Missing closing parentheses are added, as
-/// Excel does when a formula is entered.
-pub fn parse_closing(body: &str, d: &Dialect) -> std::result::Result<Expr, ParseError> {
+/// Parses a formula body (no leading `=`) in `d`, with the workbook names `known`. Missing
+/// closing parentheses are added, as Excel does when a formula is entered.
+pub fn parse_closing(body: &str, d: &Dialect, known: KnownNames<'_>) -> std::result::Result<Expr, ParseError> {
     let mut text = body.to_string();
-    let mut parsed = gridcraft_formula::parse_local(&text, d);
+    let mut parsed = gridcraft_formula::parse_local_with(&text, d, known);
     for _ in 0..8 {
         if parsed.is_ok() {
             break;
         }
         text.push(')');
-        parsed = gridcraft_formula::parse_local(&text, d);
+        parsed = gridcraft_formula::parse_local_with(&text, d, known);
     }
     parsed
 }
 
-/// A canonical formula body (`SUM(1.5,2)`) spelled in `d` (`SOMA(1,5;2)`). A body that does not
-/// parse is returned unchanged.
-pub fn to_local_body(canonical: &str, d: &Dialect) -> String {
+/// A canonical formula body (`SUM(1.5,2)`) spelled in `d` (`SOMA(1,5;2)`), read back the same
+/// with the workbook names `known`. A body that does not parse is returned unchanged.
+pub fn to_local_body(canonical: &str, d: &Dialect, known: KnownNames<'_>) -> String {
     // Text over the limit can't have been entered; it is shown as stored instead of converted.
     if d.is_invariant() || too_long(canonical) {
         return canonical.to_string();
     }
     match gridcraft_formula::parse(canonical) {
-        Ok(e) => gridcraft_formula::print_local(&e, d),
+        Ok(e) => gridcraft_formula::print_local_with(&e, d, known),
         Err(_) => canonical.to_string(),
     }
 }
 
-/// A formula body written in `d` as canonical text.
-pub fn from_local_body(local: &str, d: &Dialect) -> Result<String> {
+/// A formula body written in `d`, with the workbook names `known`, as canonical text.
+pub fn from_local_body(local: &str, d: &Dialect, known: KnownNames<'_>) -> Result<String> {
     check_formula_len(local)?;
-    let expr = parse_closing(local, d).map_err(|e| EngineError::InvalidFormula(e.to_string()))?;
+    let expr = parse_closing(local, d, known).map_err(|e| EngineError::InvalidFormula(e.to_string()))?;
     Ok(gridcraft_formula::print(&expr))
 }
 
 /// `=SUM(1.5,2)` → `=SOMA(1,5;2)`. Text that is not a formula is returned unchanged.
-pub fn to_local_formula(canonical: &str, d: &Dialect) -> String {
+pub fn to_local_formula(canonical: &str, d: &Dialect, known: KnownNames<'_>) -> String {
     match canonical.strip_prefix('=') {
-        Some(body) => format!("={}", to_local_body(body, d)),
+        Some(body) => format!("={}", to_local_body(body, d, known)),
         None => canonical.to_string(),
     }
 }
 
 /// The inverse of [`to_local_formula`]; a formula that does not parse is an
 /// [`EngineError::InvalidFormula`]. Text that is not a formula is returned unchanged.
-pub fn from_local_formula(local: &str, d: &Dialect) -> Result<String> {
+pub fn from_local_formula(local: &str, d: &Dialect, known: KnownNames<'_>) -> Result<String> {
     match local.strip_prefix('=') {
-        Some(body) => Ok(format!("={}", from_local_body(body, d)?)),
+        Some(body) => Ok(format!("={}", from_local_body(body, d, known)?)),
         None => Ok(local.to_string()),
     }
 }
@@ -124,20 +124,29 @@ pub fn value_local(v: &Value, loc: &Locale) -> String {
 
 /// What the formula bar shows for a cell in `loc`: the local formula, or the value spelled by
 /// [`value_local`].
-pub fn input_local(cell: &Cell, loc: &Locale) -> String {
+pub fn input_local(cell: &Cell, loc: &Locale, known: KnownNames<'_>) -> String {
     match &cell.formula {
-        Some(f) => to_local_formula(&format!("={}", f.text), &loc.dialect()),
+        Some(f) => to_local_formula(&format!("={}", f.text), &loc.dialect(), known),
         None => value_local(&cell.value, loc),
     }
 }
 
-/// The text of a formula-valued parameter pair: `<key>Local` (spelled in `loc`) wins over
-/// `<key>`. A local value is always converted (with or without a leading `=`) and comes back
-/// with the `=`; a canonical value is returned as given.
-pub(crate) fn canonical_formula_param(p: &Json, key: &str, loc: &Locale) -> Result<Option<String>> {
+/// [`input_local`] for the cell at `c` of `sh`. A cell picture has no input text (like
+/// `Sheet::input_text`), so its `#VALUE!` fallback is never edited, searched or replaced.
+pub fn sheet_input_local(sh: &gridcraft_model::Sheet, c: CellRef, loc: &Locale, known: KnownNames<'_>) -> String {
+    if sh.cell_pictures.contains_key(&c) {
+        return String::new();
+    }
+    sh.cell(c).map(|cell| input_local(cell, loc, known)).unwrap_or_default()
+}
+
+/// The text of a formula-valued parameter pair: `<key>Local` (spelled in `loc`, with the
+/// workbook names `known`) wins over `<key>`. A local value is always converted (with or without
+/// a leading `=`) and comes back with the `=`; a canonical value is returned as given.
+pub(crate) fn canonical_formula_param(p: &Json, key: &str, loc: &Locale, known: KnownNames<'_>) -> Result<Option<String>> {
     if let Some(t) = p.get(format!("{key}Local")).and_then(Json::as_str) {
         let body = t.trim_start().strip_prefix('=').unwrap_or(t);
-        return Ok(Some(format!("={}", from_local_body(body, &loc.dialect())?)));
+        return Ok(Some(format!("={}", from_local_body(body, &loc.dialect(), known)?)));
     }
     Ok(p.get(key).and_then(Json::as_str).map(str::to_string))
 }
@@ -150,14 +159,19 @@ pub(crate) fn canonical_formula_param(p: &Json, key: &str, loc: &Locale) -> Resu
 /// canonical text can't reproduce it (the region's currency: `R$ 3,5` is the number `3.5`
 /// with the format `"R$" #,##0.00`, which en-US would read as text). The caller journals it
 /// as a separate format step.
-pub(crate) fn canonical_input(local: &str, loc: &Locale, sys: gridcraft_core::DateSystem) -> Result<(String, Option<&'static str>)> {
+pub(crate) fn canonical_input(
+    local: &str,
+    loc: &Locale,
+    sys: gridcraft_core::DateSystem,
+    known: KnownNames<'_>,
+) -> Result<(String, Option<&'static str>)> {
     let signed_formula = local.len() > 1
         && (local.starts_with('+') || local.starts_with('-'))
         && gridcraft_core::parse::parse_number_text_in(local, sys, &loc.regional).is_none()
         && local.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '(');
     if local.starts_with('=') || signed_formula {
         let body = local.strip_prefix('=').unwrap_or(local);
-        return Ok((format!("={}", from_local_body(body, &loc.dialect())?), None));
+        return Ok((format!("={}", from_local_body(body, &loc.dialect(), known)?), None));
     }
     let parsed = gridcraft_core::parse::parse_input_in(local, sys, &loc.regional, loc.formula);
     let inv = &gridcraft_locale::INVARIANT;
@@ -177,7 +191,7 @@ pub(crate) fn canonical_input(local: &str, loc: &Locale, sys: gridcraft_core::Da
 /// the rule: a number, a formula body, or a quoted string. `<key>Local` is read like typed
 /// input (numbers by the region of `loc`, `=…` as a local formula, anything else as text) and
 /// may be a JSON number; `<key>` is canonical.
-pub(crate) fn cf_operand(rule: &Json, key: &str, loc: &Locale, sys: gridcraft_core::DateSystem) -> Result<Option<String>> {
+pub(crate) fn cf_operand(rule: &Json, key: &str, loc: &Locale, sys: gridcraft_core::DateSystem, known: KnownNames<'_>) -> Result<Option<String>> {
     match rule.get(format!("{key}Local")) {
         Some(Json::Number(n)) => return Ok(n.as_f64().map(gridcraft_core::number_to_text)),
         Some(Json::String(t)) => {
@@ -185,7 +199,7 @@ pub(crate) fn cf_operand(rule: &Json, key: &str, loc: &Locale, sys: gridcraft_co
                 return Ok(Some(gridcraft_core::number_to_text(n)));
             }
             return match t.strip_prefix('=') {
-                Some(body) => from_local_body(body, &loc.dialect()).map(Some),
+                Some(body) => from_local_body(body, &loc.dialect(), known).map(Some),
                 None => Ok(Some(format!("\"{}\"", t.replace('"', "\"\"")))),
             };
         }
@@ -211,10 +225,12 @@ fn format_applied(s: &Session, sheet: usize, at: gridcraft_core::CellRef, code: 
 }
 
 /// The calls to journal for one command call: the command with canonical params, followed by
-/// the number-format steps its typed input applied that canonical text can't carry.
-pub(crate) fn canonical_journal(s: &Session, id: &str, params: &Json) -> Vec<(String, Json)> {
+/// the number-format steps its typed input applied that canonical text can't carry. `names` is
+/// the workbook as the command found it: its names decided how local formula text read, even
+/// when the command then defined new ones.
+pub(crate) fn canonical_journal(s: &Session, id: &str, params: &Json, names: Option<&Workbook>) -> Vec<(String, Json)> {
     let mut formats = Vec::new();
-    let main = canonical_params(s, id, params, &mut formats);
+    let main = canonical_params(s, id, params, names, &mut formats);
     let mut out = vec![(id.to_string(), main)];
     out.extend(formats);
     out
@@ -226,7 +242,7 @@ pub(crate) fn canonical_journal(s: &Session, id: &str, params: &Json) -> Vec<(St
 /// way in any locale. Params without them are returned as they are, and so are params that
 /// fail to convert (the command has already reported those). Number formats that typed input
 /// applied and its canonical text lost are appended to `formats` as `home.numberFormat` calls.
-fn canonical_params(s: &Session, id: &str, params: &Json, formats: &mut Vec<(String, Json)>) -> Json {
+fn canonical_params(s: &Session, id: &str, params: &Json, names: Option<&Workbook>, formats: &mut Vec<(String, Json)>) -> Json {
     let Some(obj) = params.as_object() else { return params.clone() };
     let local_values = id == "range.setValues" && obj.get("local").and_then(Json::as_bool) == Some(true);
     let cf_rule = (id == "home.conditionalFormat")
@@ -238,6 +254,8 @@ fn canonical_params(s: &Session, id: &str, params: &Json, formats: &mut Vec<(Str
     }
     let Ok(loc) = call_locale(s, params) else { return params.clone() };
     let sys = s.active().map(|d| d.wb.date_system).unwrap_or(gridcraft_core::DateSystem::D1900);
+    let sheet = crate::cmd::target_sheet(s, params).ok();
+    let known = |n: &str| names.zip(sheet).is_some_and(|(wb, si)| wb.knows_name(n, si));
     let mut out = obj.clone();
     out.remove("locale");
     // (cell, format) pairs typed input applied; checked against the workbook afterwards.
@@ -249,7 +267,7 @@ fn canonical_params(s: &Session, id: &str, params: &Json, formats: &mut Vec<(Str
             out.remove(key);
             match base {
                 "input" => {
-                    let (canonical, format) = canonical_input(text, &loc, sys)?;
+                    let (canonical, format) = canonical_input(text, &loc, sys, &known)?;
                     out.insert("input".into(), json!(canonical));
                     if let (Some(code), "cell.set") = (format, id) {
                         let at = crate::cmd::cell_param(params, "cell").or_else(|| s.doc().ok().map(|d| d.selection.active));
@@ -273,12 +291,12 @@ fn canonical_params(s: &Session, id: &str, params: &Json, formats: &mut Vec<(Str
                 }
                 "formula1" | "formula2" if id == "data.validation" => {
                     let list = obj.get("type").and_then(Json::as_str) == Some("list");
-                    if let Some(f) = crate::cmd::data::validation_formula(params, base, &loc, sys, list)? {
+                    if let Some(f) = crate::cmd::data::validation_formula(params, base, &loc, sys, list, &known)? {
                         out.insert(base.into(), json!(f));
                     }
                 }
                 _ => {
-                    if let Some(f) = canonical_formula_param(params, base, &loc)? {
+                    if let Some(f) = canonical_formula_param(params, base, &loc, &known)? {
                         out.insert(base.into(), json!(f));
                     }
                 }
@@ -288,13 +306,13 @@ fn canonical_params(s: &Session, id: &str, params: &Json, formats: &mut Vec<(Str
             let mut canonical = rule.clone();
             for key in ["value", "value2"] {
                 if canonical.remove(&format!("{key}Local")).is_some()
-                    && let Some(stored) = cf_operand(&Json::Object(rule.clone()), key, &loc, sys)?
+                    && let Some(stored) = cf_operand(&Json::Object(rule.clone()), key, &loc, sys, &known)?
                 {
                     canonical.insert(key.into(), cf_operand_param(&stored));
                 }
             }
             if canonical.remove("formulaLocal").is_some()
-                && let Some(f) = canonical_formula_param(&Json::Object(rule.clone()), "formula", &loc)?
+                && let Some(f) = canonical_formula_param(&Json::Object(rule.clone()), "formula", &loc, &known)?
             {
                 canonical.insert("formula".into(), json!(f));
             }
@@ -309,7 +327,7 @@ fn canonical_params(s: &Session, id: &str, params: &Json, formats: &mut Vec<(Str
                 for (ri, row) in rows.iter().enumerate() {
                     let mut cell = |ci: usize, v: &Json| -> Result<Json> {
                         let Some(t) = v.as_str() else { return Ok(v.clone()) };
-                        let (text, format) = canonical_input(t, &loc, sys)?;
+                        let (text, format) = canonical_input(t, &loc, sys, &known)?;
                         if let (Some(code), Some(at)) = (format, start.and_then(|st| st.offset(ri as i64, ci as i64))) {
                             carried.push((at, code));
                         }

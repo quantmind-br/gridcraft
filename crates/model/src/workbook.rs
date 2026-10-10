@@ -158,6 +158,12 @@ impl Workbook {
             .find(|n| n.scope == Some(sheet) && n.name.eq_ignore_ascii_case(name))
             .or_else(|| self.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(name)))
     }
+    /// Whether `name` is a defined name visible from `sheet` or a table name. Formula text read
+    /// or written in a localized dialect lets these names win over the dialect's function names
+    /// and booleans (`gridcraft_formula::parse_local_with`).
+    pub fn knows_name(&self, name: &str, sheet: usize) -> bool {
+        self.name(name, sheet).is_some() || self.table(name).is_some()
+    }
     /// Spells calls of LAMBDA names the way the names are defined (`Double(4)`, where the
     /// parser gives `DOUBLE(4)`: it upper-cases function names, as built-in ones are shown).
     pub fn name_call_case(&self, e: Expr) -> Expr {

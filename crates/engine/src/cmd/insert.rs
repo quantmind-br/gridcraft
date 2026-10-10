@@ -96,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Picture",
             ["Insert", "Illustrations"],
             None,
-            "{path? | base64?: \"...\", mime?, at?: \"B2\", width?, height?, alt?, mode?: moveOnly|moveAndSize|absolute}",
+            "{path? | base64?: \"...\", mime?, at?: \"B2\", width?, height?, alt?, mode?: moveOnly|moveAndSize|absolute, placement?: cell|overCells}",
             has_doc,
             insert_picture
         ),
@@ -231,6 +231,13 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             let sh = cx.sheet_mut(sheet)?;
             sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
+            sh.cell_pictures = std::mem::take(&mut sh.cell_pictures)
+                .into_iter()
+                .filter_map(|(c, v)| {
+                    let dest = if c.col >= r.start.col && c.col <= r.end.col && c.row >= r.start.row { c.offset(1, 0) } else { Some(c) };
+                    dest.map(|c| (c, v))
+                })
+                .collect();
             for (i, c) in (r.start.col..=r.end.col).enumerate() {
                 sh.set_value(CellRef::new(r.start.row, c), gridcraft_core::Value::text(format!("Column{}", i + 1)));
             }
@@ -316,7 +323,7 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
                         t.range.end.row = t.range.end.row.saturating_sub(1);
                         let (c0, c1) = (t.range.start.col, t.range.end.col);
                         for c in c0..=c1 {
-                            sh.cells.remove(CellRef::new(row, c));
+                            sh.remove_cell(CellRef::new(row, c));
                         }
                     }
                     write_totals(sh, ti);
@@ -345,12 +352,11 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
             let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
-            sh.cells
-                .set(c, Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c) });
+            sh.set_cell(c, Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c) });
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));
         } else {
-            sh.cells.remove(c);
+            sh.remove_cell(c);
         }
     }
 }
@@ -748,14 +754,39 @@ fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
+    let placement = str_param(p, "placement").unwrap_or("overCells");
+    if !matches!(placement, "cell" | "overCells") {
+        return Err(bad("insert.picture", "placement must be cell or overCells"));
+    }
     let data = if let Some(b) = str_param(p, "base64") {
         crate::io::base64_decode(b).ok_or_else(|| bad("insert.picture", "invalid base64"))?
     } else if let Some(path) = str_param(p, "path") {
         crate::io::read_file(path)?
     } else {
-        s.ui_requests.push(crate::UiRequest::Dialog("insertPicture".into(), json!({})));
+        s.ui_requests.push(crate::UiRequest::Dialog("insertPicture".into(), json!({"placement": placement})));
         return ok();
     };
+    if placement == "cell" {
+        let mime = validate_cell_picture(&data)?;
+        let d = s.doc()?;
+        let sheet = d.wb.active_sheet;
+        let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+        let at = match str_param(p, "at") {
+            Some(a) => CellRef::parse(a).ok_or_else(|| bad("insert.picture", "invalid cell address"))?,
+            None => d.selection.active,
+        };
+        let at = sh.merge_at(at).map(|r| r.start).unwrap_or(at);
+        let style = sh.style_id(at);
+        if sh.is_protected() && d.wb.styles.get(style).protection.locked {
+            return Err(EngineError::Other("The cell you're trying to change is on a protected sheet.".into()));
+        }
+        let picture = CellPicture { data, mime: mime.into(), alt: str_param(p, "alt").unwrap_or("").into() };
+        return edit(s, |cx| {
+            cx.sheet_mut(sheet)?.set_picture(at, std::sync::Arc::new(picture));
+            cx.touch(sheet, at);
+            Ok(json!({"cell": at.a1(), "placement": "cell"}))
+        });
+    }
     if data.len() > 64 * 1024 * 1024 {
         return Err(bad("insert.picture", "image larger than 64 MB"));
     }
@@ -787,6 +818,33 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         cx.sheet_mut(sheet)?.images.push(img);
         Ok(json!({"image": id}))
     })
+}
+
+/// Validate before mutating the workbook; header dimensions alone do not prove the pixels decode.
+fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
+    if data.len() > 16 * 1024 * 1024 {
+        return Err(bad("insert.picture", "cell pictures must be at most 16 MiB"));
+    }
+    let format = image::guess_format(data).map_err(|_| bad("insert.picture", "choose a valid PNG or JPEG picture"))?;
+    let mime = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        _ => return Err(bad("insert.picture", "cell pictures support PNG and JPEG")),
+    };
+    let (width, height) = image::ImageReader::with_format(std::io::Cursor::new(data), format)
+        .into_dimensions()
+        .map_err(|_| bad("insert.picture", "invalid image dimensions"))?;
+    if width == 0 || height == 0 || width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > 16_000_000 {
+        return Err(bad("insert.picture", "cell pictures are limited to 8192 pixels per side and 16 million pixels"));
+    }
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode().map_err(|_| bad("insert.picture", "picture cannot be decoded within the 64 MiB limit"))?;
+    Ok(mime)
 }
 
 fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
@@ -957,7 +1015,7 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
         });
         let sh = cx.sheet_mut(sheet)?;
         if let Some(t) = text.clone().or_else(|| sh.value(at).is_empty().then(|| target.clone())) {
-            sh.cells.set(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style });
+            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style });
         } else {
             sh.set_style(at, link_style);
         }
@@ -1067,7 +1125,9 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let loc = crate::locale::call_locale(s, p)?;
-    let sys = s.doc()?.wb.date_system;
+    let d = s.doc()?;
+    let sys = d.wb.date_system;
+    let known = |n: &str| d.wb.knows_name(n, sheet);
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
     let style = Box::new(match rule.get("style") {
         Some(st) if st.is_object() => {
@@ -1107,11 +1167,11 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 _ => CfOperator::Greater,
             };
             // `valueLocal` is read like typed input: numbers by the region, `=…` as a local formula.
-            let operand = |key: &str| crate::locale::cf_operand(rule, key, &loc, sys);
+            let operand = |key: &str| crate::locale::cf_operand(rule, key, &loc, sys, &known);
             CfRule::CellIs { op, a: operand("value")?.unwrap_or_else(|| "\"\"".into()), b: operand("value2")?, style }
         }
         "expression" => CfRule::Expression {
-            formula: crate::locale::canonical_formula_param(rule, "formula", &loc)?.unwrap_or_default().trim_start_matches('=').to_string(),
+            formula: crate::locale::canonical_formula_param(rule, "formula", &loc, &known)?.unwrap_or_default().trim_start_matches('=').to_string(),
             style,
         },
         "containsText" => CfRule::ContainsText { text: g("text").unwrap_or_default(), style },
@@ -1194,9 +1254,10 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// The formulas of a rule spelled in `d`: `{formula}` for expressions, `{a, b}` for cell-value rules.
-fn cf_rule_local(rule: &CfRule, d: &gridcraft_locale::Dialect) -> Json {
-    let local = |f: &str| format!("={}", crate::locale::to_local_body(f, d));
+/// The formulas of a rule spelled in `d` with the workbook names `known`: `{formula}` for
+/// expressions, `{a, b}` for cell-value rules.
+fn cf_rule_local(rule: &CfRule, d: &gridcraft_locale::Dialect, known: gridcraft_formula::KnownNames<'_>) -> Json {
+    let local = |f: &str| format!("={}", crate::locale::to_local_body(f, d, known));
     match rule {
         CfRule::Expression { formula, .. } => json!({"formula": local(formula)}),
         CfRule::CellIs { a, b, .. } => json!({"a": local(a), "b": b.as_deref().map(local)}),
@@ -1209,13 +1270,14 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() {
         let d = s.doc()?;
         let dialect = d.wb.locale.dialect();
+        let known = |n: &str| d.wb.knows_name(n, sheet);
         let list: Vec<Json> = d
             .wb
             .sheet(sheet)
             .map(|sh| {
                 sh.cond_formats
                     .iter()
-                    .map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule, "ruleLocal": cf_rule_local(&c.rule, &dialect)}))
+                    .map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule, "ruleLocal": cf_rule_local(&c.rule, &dialect, &known)}))
                     .collect()
             })
             .unwrap_or_default();

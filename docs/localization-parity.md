@@ -24,6 +24,12 @@ right-to-left sheets and full complex-script support. Part of
   `CELL`/`INFO` keywords and structured-reference items are localized too. Japanese, Korean and
   Chinese keep English function names, as Excel does. Every catalog entry records its sources in
   `crates/locale/data/languages/*.toml`.
+- **Names win over translations.** Defined names visible from the sheet, table names and
+  LET/LAMBDA bindings in scope take precedence over a localized function name or boolean, in the
+  editor, the formula bar, Show Formulas, `*Local` command parameters, `FORMULATEXT` and
+  `INDIRECT` (#98): with a name `FALSO`, Spanish `=FALSO+1` reads the name. A built-in whose local
+  spelling a name has taken is written with its file prefix (`=_xlfn.SUM(1;_xlfn.FALSE())`) so it
+  reads back as the built-in. An edit in progress is rewritten when the language changes.
 - **Regional formats.** Twelve regions (CLDR conventions): decimal and group separators, list
   separator (formulas and CSV), date order and separators, month and day names, AM/PM, currency.
   Typed numbers and dates parse in the region, General display uses its separators, and the

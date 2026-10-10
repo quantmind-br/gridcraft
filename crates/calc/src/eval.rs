@@ -645,7 +645,9 @@ impl<'h> Evaluator<'h> {
                 } else {
                     match f {
                         Some(f) => {
-                            let text = f.expr().map_or_else(|| f.text.clone(), |e| gridcraft_formula::print_local(&e, &loc.dialect()));
+                            let wb = self.host.workbook();
+                            let known = |n: &str| wb.knows_name(n, a.sheet);
+                            let text = f.expr().map_or_else(|| f.text.clone(), |e| gridcraft_formula::print_local_with(&e, &loc.dialect(), &known));
                             Ev::V(Value::text(format!("={text}")))
                         }
                         None => err(CellError::NA),
@@ -1001,7 +1003,10 @@ impl<'h> Evaluator<'h> {
             }
         };
         let text = if a1 { text } else { r1c1_to_a1(&text, self.at, loc.formula.r1c1).unwrap_or(text) };
-        match gridcraft_formula::parse_local(&text, &loc.dialect()) {
+        let wb = self.host.workbook();
+        let sheet = self.sheet;
+        let parsed = gridcraft_formula::parse_local_with(&text, &loc.dialect(), &|n: &str| wb.knows_name(n, sheet));
+        match parsed {
             Ok(e @ (Expr::Ref(_) | Expr::Name(_) | Expr::Struct(_))) => match self.eval(&e) {
                 r @ Ev::R(_) => r,
                 _ => err(CellError::Ref),

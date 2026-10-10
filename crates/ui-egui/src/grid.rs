@@ -287,6 +287,7 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
 /// Text for a value with General narrowing to the available width.
 fn display_text(
     wb: &Workbook,
+    si: usize,
     sh: &Sheet,
     c: CellRef,
     v: &Value,
@@ -297,7 +298,8 @@ fn display_text(
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
     {
-        return (gridcraft_engine::locale::to_local_formula(&format!("={}", f.text), &wb.locale.dialect()), None, false, None);
+        let text = gridcraft_engine::locale::to_local_formula(&format!("={}", f.text), &wb.locale.dialect(), &|n: &str| wb.knows_name(n, si));
+        return (text, None, false, None);
     }
     if !sh.show_zeros && v.as_f64() == Some(0.0) {
         return (String::new(), None, false, None);
@@ -554,6 +556,10 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
     // Text and per-cell decorations.
     for (c, rect, lk, cfl) in &looks {
         let c = *c;
+        if let Some(picture) = sh.cell_pictures.get(&c) {
+            crate::cell_pictures::paint(p, *rect, picture);
+            continue;
+        }
         let v = sh.value(c);
         if let Some(l) = cfl
             && let Some((frac, rgb, gradient)) = l.bar
@@ -613,7 +619,7 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
         let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
         let avail_w = rect.right() - text_left;
-        let (text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+        let (text, ncolor, numeric, fill_char) = display_text(wb, si, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
         if text.is_empty() {
             continue;
         }

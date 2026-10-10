@@ -54,7 +54,8 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
         && !formula_hidden(wb, sheet, c)
     {
-        return crate::locale::to_local_formula(&format!("={}", f.text), &wb.locale.dialect());
+        let si = wb.sheet_index(&sheet.name).unwrap_or(wb.active_sheet);
+        return crate::locale::to_local_formula(&format!("={}", f.text), &wb.locale.dialect(), &|n: &str| wb.knows_name(n, si));
     }
     let style = wb.styles.get(sheet.style_id(c));
     let f = format(&v, style.num_fmt.as_str(), wb);

@@ -1201,10 +1201,17 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "insert.table", json!({}));
     }
     sep(ui);
-    let pic = big_button(ui, Icon::Picture, &l.tr("Pictures"), &l.tr("Insert a picture"), true);
-    if pic.clicked() {
-        app.open_dialog("insertPicture", json!({}));
-    }
+    let pictures = l.tr("Pictures");
+    let pic = big_button(ui, Icon::Picture, &pictures, &l.tr("Insert a picture"), true);
+    pic.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &*pictures));
+    egui::Popup::menu(&pic).show(|ui| {
+        for (label, placement) in [(msg!("Place in Cell"), "cell"), (msg!("Place over Cells"), "overCells")] {
+            if ui.button(&*l.tr(label)).clicked() {
+                app.open_dialog("insertPicture", json!({"placement": placement}));
+                ui.close();
+            }
+        }
+    });
     let shapes = big_button(ui, Icon::Shapes, &l.tr("Shapes"), &l.tr("Shapes"), true);
     egui::Popup::menu(&shapes).show(|ui| {
         for (label, kind) in [
@@ -1548,7 +1555,8 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                             None => f["description"].as_str().unwrap_or("").to_string(),
                         };
                         if ui.button(local).on_hover_text(desc).clicked() {
-                            app.begin_edit(Some(format!("={local}(")), false);
+                            // The engine starts the edit with the name in the formula language.
+                            app.run_or_alert("formulas.insertFunction", json!({"name": n}));
                             ui.close();
                         }
                     }

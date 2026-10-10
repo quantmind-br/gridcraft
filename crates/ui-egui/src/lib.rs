@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod border_preview;
+mod cell_pictures;
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -119,6 +120,11 @@ pub struct SheetView {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Native picture picker (PNG/JPEG), separate from workbook opening.
+    pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
+    /// insert into a subsequent dialog or open the image as a workbook.
+    pub pick_picture_async: Option<Box<dyn Fn(Inbox)>>,
     pub open_url: Option<Box<dyn Fn(&str)>>,
     /// Publish HTML and its plain-text alternative together. `Ok` means the host owns the
     /// write (including any asynchronous fallback); an immediate error uses egui's text path.
@@ -366,14 +372,18 @@ impl SheetApp {
         self.grid.close_filter_menu();
         // A cell being edited is rewritten in the new formula language and region.
         if let Some(ed) = &mut self.editor {
-            ed.switch_locale(locale);
+            let wb = self.session.active().map(|d| &d.wb);
+            let sheet = ed.sheet;
+            ed.switch_locale(locale, &|n: &str| wb.is_some_and(|wb| wb.knows_name(n, sheet)));
         }
     }
 
-    /// A canonical formula spelled in the formula language and region. Text that is not a complete
-    /// formula is returned unchanged.
+    /// A canonical formula spelled in the formula language and region, with the names of the
+    /// active sheet. Text that is not a complete formula is returned unchanged.
     pub fn local_formula(&self, canonical: &str) -> String {
-        gridcraft_engine::locale::to_local_formula(canonical, &self.session.locale().dialect())
+        let wb = self.session.active().map(|d| &d.wb);
+        let known = |n: &str| wb.is_some_and(|wb| wb.knows_name(n, wb.active_sheet));
+        gridcraft_engine::locale::to_local_formula(canonical, &self.session.locale().dialect(), &known)
     }
 
     /// `text` with its decimal point replaced by the region's decimal separator (for numbers that
@@ -628,7 +638,13 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
-        let current = sh.cell(at).map(|c| gridcraft_engine::locale::input_local(c, &loc)).unwrap_or_default();
+        // A picture has no editable scalar text. Selecting it, F2, or clicking
+        // the formula bar must not turn its fallback value into a text edit.
+        // Typing still starts an intentional replacement.
+        if text.is_none() && sh.cell_pictures.contains_key(&at) {
+            return;
+        }
+        let current = gridcraft_engine::locale::sheet_input_local(sh, at, &loc, &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
         let (text, replace) = match text {
             Some(t) => (t, true),
             None => (current.clone(), false),

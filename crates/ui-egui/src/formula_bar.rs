@@ -70,11 +70,14 @@ fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+    if let Some(picture) = sh.cell_pictures.get(&a) {
+        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+    }
     if let Some(c) = sh.cell(a) {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
-        return gridcraft_engine::locale::input_local(c, &app.session.locale());
+        return gridcraft_engine::locale::input_local(c, &app.session.locale(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
     }
     // A spilled cell shows the anchor's formula greyed out in Excel; we show it plainly.
     for (anchor, r) in &sh.spill_ranges {

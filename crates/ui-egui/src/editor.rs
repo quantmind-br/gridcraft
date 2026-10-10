@@ -87,16 +87,17 @@ impl EditState {
 
     /// Moves the text to another formula language and region (the user switched while editing):
     /// a formula is read in the old dialect and written in the new one, with the caret at its
-    /// end; plain text and formulas that do not parse yet stay as typed.
-    pub fn switch_locale(&mut self, new: Arc<Locale>) {
+    /// end; plain text and formulas that do not parse yet stay as typed. `known` are the
+    /// workbook names, which win over function names and booleans in both dialects.
+    pub fn switch_locale(&mut self, new: Arc<Locale>, known: gridcraft_engine::formula::KnownNames<'_>) {
         use gridcraft_engine::locale::{from_local_formula, to_local_formula};
         if *self.locale != *new {
             let converted = self
                 .text
                 .starts_with('=')
-                .then(|| from_local_formula(&self.text, &self.locale.dialect()).ok())
+                .then(|| from_local_formula(&self.text, &self.locale.dialect(), known).ok())
                 .flatten()
-                .map(|canonical| to_local_formula(&canonical, &new.dialect()));
+                .map(|canonical| to_local_formula(&canonical, &new.dialect(), known));
             if let Some(text) = converted.filter(|t| *t != self.text) {
                 self.text = text;
                 self.caret = self.text.chars().count();
