@@ -49,6 +49,13 @@ fn interface_language(code: &str) -> Option<&'static gridcraft_locale::Language>
     Some(gridcraft_locale::negotiate_language(&normalized))
 }
 
+/// The code old builds detected for `system_locale` and saved when the user never chose: the
+/// primary language when they had a translation for it, English otherwise.
+fn legacy_system_language(system_locale: &str) -> &'static str {
+    let primary = system_locale.trim().split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+    ["zh", "ja", "ko", "ru", "pt"].into_iter().find(|code| *code == primary).unwrap_or("en")
+}
+
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -231,19 +238,27 @@ impl SheetApp {
 
     /// Import the old interface-only preference only while the engine follows the system.
     /// Unknown or malformed values are ignored without resetting other UI preferences.
+    ///
+    /// Old builds always saved a language; when the user never picked one, it was their system
+    /// detection, which knew few languages and fell back to English (a German system saved `en`).
+    /// That value is not a choice, so it keeps following the system, now German.
     pub fn migrate_ui_language(&mut self, saved: &Json) -> bool {
         if self.session.prefs.ui_language != "system" {
             return false;
         }
-        saved.get("language").and_then(Json::as_str).is_some_and(|code| self.set_interface_language(code).is_ok())
+        let Some(code) = saved.get("language").and_then(Json::as_str) else { return false };
+        if code.eq_ignore_ascii_case(legacy_system_language(self.session.system_locale())) {
+            return false;
+        }
+        self.set_interface_language(code).is_ok()
     }
 
-    fn set_interface_language(&mut self, code: &str) -> Result<Json, String> {
+    fn set_interface_language(&mut self, code: &str) -> Result<Json, EngineError> {
         let Some(language) = interface_language(code) else {
             let available = gridcraft_locale::LANGUAGES.iter().map(|l| l.tag).collect::<Vec<_>>().join(", ");
-            return Err(format!("unknown language {code:?} (available: {available})"));
+            return Err(EngineError::InvalidLocale(format!("unknown language {code:?} (available: {available})")));
         };
-        let mut result = self.session.run("app.setLocale", json!({"uiLanguage": language.tag}))?;
+        let mut result = self.session.execute("app.setLocale", json!({"uiLanguage": language.tag}))?;
         self.after_engine();
         result["language"] = json!(language.tag);
         Ok(result)
@@ -281,7 +296,7 @@ impl SheetApp {
             self.commit_text_box_edit()?;
         }
         if let Some(r) = self.run_ui_command(id, &params) {
-            return r.map_err(EngineError::Other);
+            return r;
         }
         let r = self.session.execute(id, params);
         self.after_engine();
@@ -369,14 +384,14 @@ impl SheetApp {
 
     /// How number fields show and read numbers in the session's region.
     pub fn number_style(&self) -> widgets::NumberStyle {
-        let system = self.session.active().map_or(gridcraft_engine::core::DateSystem::D1900, |d| d.wb.date_system);
-        widgets::NumberStyle::new(self.session.locale().regional, system)
+        widgets::NumberStyle::new(self.session.locale().regional)
     }
 
-    /// A number typed in the region's spelling (`1,5`, `1.000`, `10%`), or `None` when `text` is
-    /// not a number there.
+    /// A number typed in the region's spelling and read like cell input (`1,5`, `1.000`, `10%`,
+    /// or a date for a date series' stop value), or `None` when `text` is not a number there.
     pub fn parse_number(&self, text: &str) -> Option<f64> {
-        self.number_style().parse(text)
+        let system = self.session.active().map_or(gridcraft_engine::core::DateSystem::D1900, |d| d.wb.date_system);
+        gridcraft_engine::core::parse::parse_number_text_in(text, system, &self.session.locale().regional)
     }
 
     /// `n` spelled with the region's decimal separator.
@@ -385,7 +400,7 @@ impl SheetApp {
     }
 
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
-    fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
+    fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, EngineError>> {
         let r = match id {
             "ui.ribbonTab" => {
                 self.ui.ribbon_tab = p.get("tab").and_then(Json::as_str).unwrap_or("Home").to_string();
@@ -412,11 +427,15 @@ impl SheetApp {
                         self.ui.dark = mode == "dark";
                         self.ui.system_theme = false;
                     }
-                    _ => return Some(Err("theme mode must be system, light, or dark".into())),
+                    _ => return Some(Err(EngineError::BadParams { cmd: id.into(), msg: "theme mode must be system, light, or dark".into() })),
                 }
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
-            "view.zoom100" => return Some(self.session.run("view.zoom", json!({"percent": 100})).inspect(|_| self.after_engine())),
+            "view.zoom100" => {
+                let r = self.session.execute("view.zoom", json!({"percent": 100}));
+                self.after_engine();
+                r
+            }
             "app.language.set" => {
                 let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
                 self.set_interface_language(code)
@@ -457,22 +476,27 @@ impl SheetApp {
         }
     }
 
-    /// The fonts the interface language and the text of the open workbooks need. The Options
-    /// dialog lists every language by its native name, so opening it makes the CJK fonts
-    /// needed for good (they load once, not on every open and close).
-    pub fn font_needs(&mut self) -> theme::FontNeeds {
-        let tag = self.l10n.tag();
+    /// The fonts the interface language and the text of the open workbooks need.
+    pub fn font_needs(&mut self) -> theme::FontNeeds<'_> {
+        let cjk = self.needs_cjk();
+        theme::FontNeeds { language: self.l10n.tag(), cjk, downloaded: &self.font_downloads }
+    }
+
+    /// Whether the font set needs CJK faces. The Options dialog lists every language by its
+    /// native name, so opening it makes them needed for good (they load once, not on every open
+    /// and close).
+    fn needs_cjk(&mut self) -> bool {
         if self.dialog.as_ref().is_some_and(|d| d.name == "options") {
             self.cjk_seen = true;
         }
         if !self.cjk_seen {
             self.cjk_seen = self.scan_cjk();
         }
-        theme::FontNeeds { language: tag.to_string(), cjk: self.cjk_seen || theme::is_cjk_language(tag), downloaded: self.font_downloads.clone() }
+        self.cjk_seen || theme::is_cjk_language(self.l10n.tag())
     }
 
     /// Whether the text being edited, or the active workbook (when it changed since the last scan),
-    /// has a character that needs a CJK font.
+    /// has a character that needs a CJK font. The scan reads at most 200,000 cells per workbook.
     fn scan_cjk(&mut self) -> bool {
         if self.editor.as_ref().is_some_and(|e| theme::has_cjk(&e.text)) {
             return true;
@@ -482,10 +506,13 @@ impl SheetApp {
         if self.cjk_checked == Some(stamp) {
             return false;
         }
-        let found = d.wb.sheets.iter().any(|sh| {
-            theme::has_cjk(&sh.name)
-                || sh.cells.iter().take(200_000).any(|(_, c)| matches!(&c.value, gridcraft_engine::core::Value::Text(t) if theme::has_cjk(t)))
-        });
+        let sheets = &d.wb.sheets;
+        let found = sheets.iter().any(|sh| theme::has_cjk(&sh.name))
+            || sheets
+                .iter()
+                .flat_map(|sh| sh.cells.iter())
+                .take(200_000)
+                .any(|(_, c)| matches!(&c.value, gridcraft_engine::core::Value::Text(t) if theme::has_cjk(t)));
         self.cjk_checked = Some(stamp);
         found
     }
@@ -500,20 +527,28 @@ impl SheetApp {
             .map(|i| std::mem::take(&mut *i.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
             .unwrap_or_default();
         for (name, bytes) in arrived {
-            self.font_downloads.push((name, Arc::new(egui::FontData::from_owned(bytes))));
+            // A file delivered twice changes nothing (and must not rebuild the fonts).
+            if self.font_downloads.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            match theme::font_data(bytes, 0) {
+                Some(fd) => self.font_downloads.push((name, Arc::new(fd))),
+                // Static hosts and proxies answer a missing file with an HTML page.
+                None => log::warn!("font {name} is not a TrueType/OpenType file; CJK text shows as boxes without it"),
+            }
         }
-        let needs = self.font_needs();
-        if needs.cjk
-            && let Some(fetch) = &self.services.fetch_font
-        {
-            let file = theme::web_cjk_font(&needs.language);
+        let cjk = self.needs_cjk();
+        let language = self.l10n.tag();
+        if cjk && let Some(fetch) = &self.services.fetch_font {
+            let file = theme::web_cjk_font(language);
             if self.font_requested != Some(file) && !self.font_downloads.iter().any(|(n, _)| n == file) {
                 fetch(file);
                 self.font_requested = Some(file);
             }
         }
+        let needs = theme::FontNeeds { language, cjk, downloaded: &self.font_downloads };
         let key = needs.key();
-        if self.font_key.as_ref() == Some(&key) {
+        if self.font_key == Some(key) {
             return;
         }
         ctx.set_fonts(theme::font_definitions(&needs));

@@ -735,7 +735,7 @@ fn trend_impl(c: &dyn Ctx, a: &[Arg], log: bool) -> R<Value> {
     let constant = const_arg(c, a, 3)?;
     let fit = regress(&xy.y, &xy.x, xy.k, constant)?;
     let predict = |row: &[f64]| -> Value {
-        let v = fit.b + fit.coef.iter().zip(row).map(|(c, x)| c * x).sum::<f64>();
+        let v = fit.b + fit.coef.iter().zip(row).map(|(k, x)| k * x).sum::<f64>();
         Value::number(if log { v.exp() } else { v })
     };
     match opt_value(a, 2) {
@@ -1166,8 +1166,8 @@ fn f_test(a: &[Arg], c: C) -> R<Value> {
     }
     let f = v1 / v2;
     let (d1, d2) = ((x.len() - 1) as f64, (y.len() - 1) as f64);
-    let c = f_cdf(f, d1, d2);
-    num_val((2.0 * c.min(1.0 - c)).min(1.0))
+    let p = f_cdf(f, d1, d2);
+    num_val((2.0 * p.min(1.0 - p)).min(1.0))
 }
 
 fn binom_dist(a: &[Arg], c: C) -> R<Value> {

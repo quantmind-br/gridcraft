@@ -1345,6 +1345,28 @@ fn table_resize_keeps_columns_across_a_language_switch() {
 }
 
 #[test]
+fn table_resize_never_repeats_a_column_name() {
+    // Blank header cells keep the column at their position; new columns skip every kept or typed
+    // name, wherever it sits (structured references need unique names).
+    for (table, typed, resized, expect) in [
+        ("A1:B2", [].as_slice(), "B1:C2", ["Column2", "Column3"].as_slice()),
+        ("B1:C2", [].as_slice(), "A1:C2", ["Column3", "Column1", "Column2"].as_slice()),
+        // A cleared header keeps its column, unless a header typed elsewhere takes its name.
+        ("A1:B2", [("A1", ""), ("B1", "")].as_slice(), "A1:C2", ["Column1", "Column2", "Column3"].as_slice()),
+        ("A1:B2", [("A1", ""), ("C1", "Column1")].as_slice(), "A1:C2", ["Column3", "Column2", "Column1"].as_slice()),
+    ] {
+        let mut s = s();
+        s.execute("insert.table", json!({"range": table, "header": true})).unwrap();
+        for (cell, text) in typed {
+            s.execute("cell.set", json!({"cell": cell, "input": text})).unwrap();
+        }
+        s.execute("table.resize", json!({"table": "Table1", "range": resized})).unwrap();
+        let names: Vec<String> = s.doc().unwrap().wb.sheets[0].tables[0].columns.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(names, expect, "{table} -> {resized}");
+    }
+}
+
+#[test]
 fn find_and_replace_work_on_what_the_formula_bar_shows() {
     let mut s = session_in(prefs("de-DE", "de-DE"));
     s.execute("cell.set", json!({"cell": "A1", "inputLocal": "=SUMME(B1;C1)"})).unwrap();

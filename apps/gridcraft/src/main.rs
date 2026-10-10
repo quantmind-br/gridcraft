@@ -117,12 +117,13 @@ fn load_ui_prefs(app: &mut SheetApp) {
     if let Ok(b) = std::fs::read(dir.join("ui.json"))
         && let Ok(saved) = serde_json::from_slice::<serde_json::Value>(&b)
     {
-        if let Ok(ui) = serde_json::from_value::<gridcraft_ui_egui::UiState>(saved.clone()) {
+        if let Ok(ui) = <gridcraft_ui_egui::UiState as serde::Deserialize>::deserialize(&saved) {
             app.ui = ui;
         }
         if app.migrate_ui_language(&saved) {
-            // Persist immediately: migration happens once, even if the process exits abruptly.
-            write_prefs(&dir, &app.session.prefs);
+            // Persist both files at once: ui.json without the old `language` key, so a crash
+            // before exit can't migrate it again over a later choice of "system".
+            save_prefs(app);
         }
     }
 }

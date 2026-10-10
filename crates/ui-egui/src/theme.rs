@@ -166,15 +166,23 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
     )
 }
 
+/// Font file bytes as egui font data, or `None` when they are not a TrueType/OpenType font (or a
+/// collection with face `index`). epaint panics on font data it cannot parse, and font files are
+/// untrusted: system files, and on the web whatever the server answered.
+pub fn font_data(bytes: Vec<u8>, index: u32) -> Option<FontData> {
+    skrifa::FontRef::from_index(&bytes, index).ok()?;
+    let mut fd = FontData::from_owned(bytes);
+    fd.index = index;
+    Some(fd)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn try_load(paths: &[(&str, u32)], loaded: &mut Vec<(String, u32, Arc<FontData>)>) -> Option<Arc<FontData>> {
     for (p, index) in paths {
         if let Some((_, _, data)) = loaded.iter().find(|(path, face, _)| path.as_str() == *p && face == index) {
             return Some(Arc::clone(data));
         }
-        if let Ok(bytes) = std::fs::read(p) {
-            let mut fd = FontData::from_owned(bytes);
-            fd.index = *index;
+        if let Some(fd) = std::fs::read(p).ok().and_then(|bytes| font_data(bytes, *index)) {
             let data = Arc::new(fd);
             loaded.push(((*p).to_owned(), *index, Arc::clone(&data)));
             return Some(data);
@@ -386,23 +394,23 @@ fn noto_otf_order(han: HanOrder) -> [&'static str; 4] {
 }
 
 /// What the font set has to cover beyond Latin text.
-#[derive(Clone, Debug, Default)]
-pub struct FontNeeds {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FontNeeds<'a> {
     /// Interface language tag (`ja-JP`); picks the CJK face whose Han glyph shapes match.
-    pub language: String,
+    pub language: &'a str,
     /// The interface or a workbook uses CJK characters: add the CJK fallback chain.
     pub cjk: bool,
-    /// Font files the host delivered (web build: `fonts/<name>` downloaded on demand).
-    pub downloaded: Vec<(String, Arc<FontData>)>,
+    /// Font files the host delivered (web build: `fonts/<name>` downloaded on demand), each once.
+    pub downloaded: &'a [(String, Arc<FontData>)],
 }
 
-/// Only coverage, Han glyph order and delivered font count change the installed font set. The
-/// copyable order avoids allocating a language string on every frame or rebuilding for equivalent tags.
-pub type FontKey = (Option<HanOrder>, bool, usize);
+/// Only CJK coverage with its Han glyph order, and the delivered font count, change the installed
+/// font set: equivalent tags (`zh-HK`, `zh-TW`) never rebuild it.
+pub type FontKey = (Option<HanOrder>, usize);
 
-impl FontNeeds {
+impl FontNeeds<'_> {
     pub fn key(&self) -> FontKey {
-        (self.cjk.then(|| HanOrder::of(&self.language)), self.cjk, self.downloaded.len())
+        (self.cjk.then(|| HanOrder::of(self.language)), self.downloaded.len())
     }
 }
 
@@ -416,7 +424,7 @@ pub fn font_definitions(needs: &FontNeeds) -> FontDefinitions {
     let mut fallback: Vec<String> = Vec::new();
     // Share a system file used by a role and a script fallback instead of reading/copying it twice.
     let mut system_files = Vec::new();
-    let han = HanOrder::of(&needs.language);
+    let han = HanOrder::of(needs.language);
     let system_fallback = load_fallback(&mut fonts, han, needs.cjk, &mut system_files);
     let add_craft = |fonts: &mut FontDefinitions, chain: &mut Vec<String>, f: &CraftFont| {
         let key = format!("craft-{}-{}", f.family, f.style);
@@ -432,7 +440,7 @@ pub fn font_definitions(needs: &FontNeeds) -> FontDefinitions {
         for f in CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&script)) {
             add_craft(&mut fonts, &mut fallback, f);
         }
-        let preferred = web_cjk_font(&needs.language);
+        let preferred = web_cjk_font(needs.language);
         let mut downloaded: Vec<&(String, Arc<FontData>)> = needs.downloaded.iter().collect();
         downloaded.sort_by_key(|(name, _)| name != preferred);
         for (name, data) in downloaded {
@@ -447,6 +455,10 @@ pub fn font_definitions(needs: &FontNeeds) -> FontDefinitions {
             for f in CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Jpan") && !f.scripts.contains(&script)) {
                 add_craft(&mut fonts, &mut fallback, f);
             }
+        }
+        // Last resort, other regional faces: Hangul in a workbook under a Japanese interface.
+        for f in CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| ["Hans", "Hant", "Kore"].contains(s))) {
+            add_craft(&mut fonts, &mut fallback, f);
         }
     }
     for f in CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|script| ["Cyrl", "Thai", "Hebr"].contains(script))) {
@@ -777,7 +789,7 @@ mod tests {
     fn downloaded_fonts_extend_every_family_without_duplicate_keys() {
         let data = Arc::new(FontData::from_static(&[0u8; 4]));
         let downloaded = vec![("cjk-ja.ttf".into(), data.clone()), ("cjk-ja.ttf".into(), data)];
-        let fonts = font_definitions(&FontNeeds { language: "ja-JP".into(), cjk: true, downloaded });
+        let fonts = font_definitions(&FontNeeds { language: "ja-JP", cjk: true, downloaded: &downloaded });
         for family in [FontFamily::Proportional, FontFamily::Name(MONO.into()), FontFamily::Name(UI.into())] {
             let chain = fonts.families.get(&family).cloned().unwrap_or_default();
             assert_eq!(chain.iter().filter(|name| *name == "downloaded-cjk-ja.ttf").count(), 1, "{family:?}");
@@ -791,7 +803,7 @@ mod tests {
         let data = Arc::new(FontData::from_static(&[0u8; 4]));
         let downloaded = vec![("cjk-ja.ttf".to_string(), data.clone()), ("cjk-ko.ttf".to_string(), data)];
         let position = |language: &str, font: &str| {
-            let fonts = font_definitions(&FontNeeds { language: language.into(), cjk: true, downloaded: downloaded.clone() });
+            let fonts = font_definitions(&FontNeeds { language, cjk: true, downloaded: &downloaded });
             let chain = fonts.families.get(&FontFamily::Name(UI.into())).cloned().unwrap_or_default();
             chain.iter().position(|n| n == font)
         };
@@ -803,17 +815,14 @@ mod tests {
 
     #[test]
     fn the_font_key_tracks_coverage_and_shapes_not_language_names() {
-        let needs = |language: &str, cjk: bool| FontNeeds { language: language.into(), cjk, downloaded: vec![] };
+        let needs = |language: &'static str, cjk: bool| FontNeeds { language, cjk, downloaded: &[] };
         assert_eq!(needs("pt-BR", false).key(), needs("ru-RU", false).key());
         assert_eq!(needs("pt-BR", true).key(), needs("ru-RU", true).key());
         assert_eq!(needs("zh-HK", true).key(), needs("zh-TW", true).key());
         assert_ne!(needs("ja-JP", true).key(), needs("ko-KR", true).key());
         assert_ne!(needs("pt-BR", false).key(), needs("pt-BR", true).key());
-        let mut downloaded = needs("ja-JP", true);
-        let before = downloaded.key();
-        downloaded.downloaded.push(("cjk-ja.ttf".into(), Arc::new(FontData::from_static(&[0u8; 4]))));
-        assert_ne!(before, downloaded.key());
-        assert_eq!(downloaded.key(), downloaded.key());
+        let fonts = [("cjk-ja.ttf".to_string(), Arc::new(FontData::from_static(&[0u8; 4])))];
+        assert_ne!(needs("ja-JP", true).key(), FontNeeds { downloaded: &fonts, ..needs("ja-JP", true) }.key());
     }
 
     #[test]
@@ -837,7 +846,7 @@ mod tests {
         // (after the Latin/default fonts) so Latin still wins for Latin text, in the language's order.
         for language in ["en-US", "ja-JP", "zh-TW", "ko-KR"] {
             let han = HanOrder::of(language);
-            let fonts = font_definitions(&FontNeeds { language: language.into(), cjk: true, downloaded: vec![] });
+            let fonts = font_definitions(&FontNeeds { language, cjk: true, downloaded: &[] });
             let fb_keys: Vec<String> =
                 fallback_faces(han).into_iter().map(|(k, _)| k.to_string()).filter(|k| fonts.font_data.contains_key(k)).collect();
             if fb_keys.is_empty() {
@@ -880,7 +889,7 @@ mod tests {
         // The region-merged Noto Sans CJK .ttc serves Japanese, Chinese and Hangul; it must be loaded
         // once, not once per script (tens of MB each).
         for language in ["en-US", "ja-JP", "zh-TW", "ko-KR"] {
-            let fonts = font_definitions(&FontNeeds { language: language.into(), cjk: true, downloaded: vec![] });
+            let fonts = font_definitions(&FontNeeds { language, cjk: true, downloaded: &[] });
             let present: Vec<&Arc<FontData>> =
                 fallback_faces(HanOrder::of(language)).into_iter().filter_map(|(k, _)| fonts.font_data.get(k)).collect();
             for (i, a) in present.iter().enumerate() {
@@ -893,7 +902,7 @@ mod tests {
 
     #[test]
     fn cyrillic_fallback_is_available_without_cjk_and_reuses_system_bytes() {
-        let fonts = font_definitions(&FontNeeds { language: "ru-RU".into(), cjk: false, downloaded: vec![] });
+        let fonts = font_definitions(&FontNeeds { language: "ru-RU", cjk: false, downloaded: &[] });
         assert!(!fonts.font_data.keys().any(|key| key.starts_with("sys-cjk-")));
         if !fonts.font_data.contains_key("sys-cyrillic") {
             return; // no system Cyrillic face on this machine
@@ -939,7 +948,7 @@ mod tests {
         ];
         for language in ["en-US", "ja-JP", "zh-TW", "ko-KR", "ru-RU"] {
             let ctx = egui::Context::default();
-            ctx.set_fonts(font_definitions(&FontNeeds { language: language.into(), cjk: true, downloaded: vec![] }));
+            ctx.set_fonts(font_definitions(&FontNeeds { language, cjk: true, downloaded: &[] }));
             let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
             out.textures_delta.clear(); // nothing consumes the atlas in a headless test
             // `has_glyphs` is a false negative when the face that owns the script is also the face

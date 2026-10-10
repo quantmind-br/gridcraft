@@ -72,6 +72,16 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem, region: &Regional) -> Opti
     parse_numeric(s.trim(), sys, region).map(|(n, _)| n)
 }
 
+/// A plain number in a region's spelling: sign, currency, thousands separators, percent and
+/// exponent, but no fractions, dates or times (number boxes such as a font size or a width).
+pub fn parse_plain_number_in(s: &str, region: &Regional) -> Option<f64> {
+    let t = s.trim();
+    if t.len() > MAX_NUMERIC_TEXT {
+        return None;
+    }
+    parse_plain(t, region).map(|(n, _)| n)
+}
+
 /// Longest text that is read as a number or date (Excel's limit for typed numbers). Longer text
 /// stays text and fails numeric coercion, before anything is allocated for it.
 const MAX_NUMERIC_TEXT: usize = 255;

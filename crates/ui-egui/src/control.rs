@@ -167,12 +167,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {
-                let label = match id {
-                    "app.language.set" => app.l10n.text("ui-language-command-set", &[]).into_owned(),
-                    "app.language.english" => app.l10n.text("ui-language-command-english", &[]).into_owned(),
-                    "app.language.japanese" => app.l10n.text("ui-language-command-japanese", &[]).into_owned(),
-                    _ => label.to_string(),
-                };
+                // English, like the engine labels: the control channel is a machine-readable surface.
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
             ok(Json::Array(v))

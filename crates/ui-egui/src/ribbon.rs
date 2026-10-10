@@ -122,7 +122,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                if icon_button(ui, Icon::Search, t.text_dim, &l.tr("Search commands (⌘⇧Space)"), vec2(28.0, 26.0)).clicked() {
+                if icon_button(ui, Icon::Search, t.text_dim, &l.tr("Search Commands"), vec2(28.0, 26.0)).clicked() {
                     app.open_dialog("commandSearch", json!({}));
                 }
                 let share = small_button(ui, Icon::Share, &l.tr("Share"), &l.tr("Share: export or save a copy"), true);
@@ -1850,7 +1850,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
     // the current language so it stays readable; the choices are always shown in their own script.
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(l.tr("Interface language")).font(theme::ui_font(11.5)).color(t.text_dim));
-        egui::ComboBox::from_id_salt("ui_language")
+        let picker = egui::ComboBox::from_id_salt("ui_language")
             .width(120.0)
             .selected_text(egui::RichText::new(lang.native_name).font(theme::ui_font(12.5)))
             .show_ui(ui, |ui| {
@@ -1860,6 +1860,10 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
             });
+        // The open list shows 日本語, 中文 and 한국어: like the Options dialog, it needs the CJK fonts.
+        if picker.inner.is_some() {
+            app.cjk_seen = true;
+        }
     });
 }
 

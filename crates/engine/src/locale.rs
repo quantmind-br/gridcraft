@@ -488,6 +488,11 @@ impl Session {
         self.locale.clone()
     }
 
+    /// The OS or browser locale tag given to [`Session::set_system_locale`].
+    pub fn system_locale(&self) -> &str {
+        &self.system_locale
+    }
+
     /// The OS or browser locale tag the apps detect (`pt_BR.UTF-8`, `de-AT`), given once the saved
     /// preferences are in `prefs`; the `"system"` preferences resolve through it. Repairs saved
     /// locale preferences that no longer resolve, then re-resolves and applies like

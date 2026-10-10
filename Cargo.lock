@@ -1463,6 +1463,7 @@ dependencies = [
  "log",
  "muda",
  "rfd",
+ "serde",
  "serde_json",
  "sys-locale",
  "winresource",
@@ -1623,6 +1624,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "skrifa",
  "toml",
 ]
 

@@ -155,7 +155,10 @@ pub fn tokenize_local(src: &str, d: &Dialect) -> Result<Vec<Token>, LexError> {
                 let Some(e) = CellError::parse(canonical) else {
                     return Err(LexError { msg: "unknown error literal".into(), pos: start });
                 };
-                let len = rest.get(..bytes).map_or(0, |s| s.chars().count());
+                // Never advance by zero characters: that would loop forever.
+                let Some(len) = rest.get(..bytes).map(|s| s.chars().count()).filter(|n| *n > 0) else {
+                    return Err(LexError { msg: "unknown error literal".into(), pos: start });
+                };
                 // `#REF!A1` style is not valid; `#REF!` is an error literal.
                 push(&mut out, Tok::Error(e), i + len);
                 i += len;

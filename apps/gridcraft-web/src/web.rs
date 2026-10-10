@@ -43,16 +43,8 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut app = SheetApp::new(session, services(inbox.clone(), cc.egui_ctx.clone()));
-                    if let Some(saved) = load_json::<serde_json::Value>(UI_KEY) {
-                        if let Ok(ui) = serde_json::from_value(saved.clone()) {
-                            app.ui = ui;
-                        }
-                        if app.migrate_ui_language(&saved)
-                            && let Some(storage) = storage()
-                            && let Ok(prefs) = serde_json::to_string(&app.session.prefs)
-                        {
-                            let _ = storage.set_item(PREFS_KEY, &prefs);
-                        }
+                    if let Some(ui) = load_json::<gridcraft_ui_egui::UiState>(UI_KEY) {
+                        app.ui = ui;
                     }
                     SheetApp::setup_context(&cc.egui_ctx, app.ui.dark);
                     Ok(Box::new(WebShell::new(app, inbox)))

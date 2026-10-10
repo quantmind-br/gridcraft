@@ -9,13 +9,17 @@ use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
 fn harness(session: Session) -> egui_kittest::Harness<'static, SheetApp> {
+    harness_with(session, Default::default())
+}
+
+fn harness_with(session: Session, services: gridcraft_ui_egui::Services) -> egui_kittest::Harness<'static, SheetApp> {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        SheetApp::new(session, services),
     );
     h.run_steps(4);
     h
@@ -217,7 +221,8 @@ fn language_switch_translates_the_ribbon_and_persists() {
 #[test]
 fn legacy_ui_language_migrates_once_without_resetting_other_preferences() {
     let mut app = SheetApp::new(blank(), Default::default());
-    for (code, tag) in [("en", "en-US"), ("pt", "pt-BR"), ("zh", "zh-CN"), ("ja", "ja-JP"), ("ko", "ko-KR"), ("ru", "ru-RU")] {
+    app.session.set_system_locale("de_DE.UTF-8");
+    for (code, tag) in [("pt", "pt-BR"), ("zh", "zh-CN"), ("ja", "ja-JP"), ("ko", "ko-KR"), ("ru", "ru-RU")] {
         app.session.prefs.ui_language = "system".into();
         let saved = json!({"language": code, "dark": true});
         app.ui = serde_json::from_value(saved.clone()).unwrap();
@@ -234,6 +239,24 @@ fn legacy_ui_language_migrates_once_without_resetting_other_preferences() {
         assert_eq!(app.session.prefs.ui_language, "system");
         assert!(app.ui.dark);
     }
+}
+
+#[test]
+fn a_saved_language_that_old_builds_detected_keeps_following_the_system() {
+    // Old builds saved their own system detection, English for languages they lacked: on a German
+    // system "en" was never a choice, and German is available now.
+    let mut app = SheetApp::new(blank(), Default::default());
+    for (system, saved, followed) in [("de_DE.UTF-8", "en", "de-DE"), ("ja-JP", "ja", "ja-JP"), ("pt-PT", "pt", "pt-PT")] {
+        app.session.prefs.ui_language = "system".into();
+        app.session.set_system_locale(system);
+        assert!(!app.migrate_ui_language(&json!({"language": saved})));
+        assert_eq!(app.session.prefs.ui_language, "system");
+        assert_eq!(app.session.locale().ui.tag, followed);
+    }
+    // A language other than the detected one was picked by the user: it migrates.
+    app.session.set_system_locale("pt-PT");
+    assert!(app.migrate_ui_language(&json!({"language": "en"})));
+    assert_eq!(app.session.prefs.ui_language, "en-US");
 }
 
 #[test]
@@ -439,6 +462,14 @@ fn number_helpers_and_filter_blanks_follow_the_region() {
     assert_eq!(h.state().number_text(2.5), "2,5");
     assert_eq!(h.state().parse_number("1.000,5"), Some(1000.5));
     assert_eq!(h.state().parse_number("1.5x"), None);
+    // Number boxes (sizes, widths) read plain numbers; text fields read like a cell, so a date
+    // series takes a date as its stop value.
+    let boxes = h.state().number_style();
+    assert_eq!(boxes.parse("1.000,5"), Some(1000.5));
+    for text in ["1/2", "10:30", "1.2.2026"] {
+        assert_eq!(boxes.parse(text), None, "{text}");
+    }
+    assert!(h.state().parse_number("1.2.2026").is_some_and(|n| n > 40_000.0));
     // The filter menu hides the engine's "(Blanks)" row behind the interface language's word.
     let wb = h.state().session.active().unwrap().wb.clone();
     let values = gridcraft_engine::cmd::data::filter_values(&wb, 0, 0);
@@ -558,14 +589,47 @@ fn the_font_set_is_stable_across_opening_and_closing_the_options_dialog() {
     let mut h = harness(blank());
     h.run_steps(2);
     let before = h.state_mut().font_needs().key();
-    assert!(before.0.is_none() && !before.1, "{before:?}: no CJK needed yet");
+    assert!(before.0.is_none(), "{before:?}: no CJK needed yet");
     h.state_mut().open_dialog("options", json!({}));
     h.run_steps(2);
     let open = h.state_mut().font_needs().key();
-    assert!(open.1);
+    assert!(open.0.is_some());
     h.state_mut().dialog = None;
     h.run_steps(2);
     assert_eq!(h.state_mut().font_needs().key(), open, "closing the dialog must not rebuild the fonts again");
+}
+
+#[test]
+fn the_language_picker_asks_for_the_cjk_fonts_when_it_opens() {
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "View".into();
+    h.run_steps(2);
+    assert!(!h.state_mut().font_needs().cjk, "a closed picker shows only the current language");
+    h.get_by_value("English (United States)").click();
+    h.run_steps(2);
+    assert!(h.state_mut().font_needs().cjk, "the open list shows 日本語, 中文 and 한국어");
+}
+
+#[test]
+fn a_downloaded_font_that_is_not_a_font_is_dropped_once() {
+    // Static hosts answer a missing `fonts/cjk-ja.ttf` with their HTML page (status 200); egui
+    // panics on font data it cannot parse.
+    let inbox: gridcraft_ui_egui::Inbox = Default::default();
+    let requested = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let (fetch_inbox, fetch_requested) = (inbox.clone(), requested.clone());
+    let services = gridcraft_ui_egui::Services {
+        fetch_font: Some(Box::new(move |name: &str| {
+            fetch_requested.borrow_mut().push(name.to_string());
+            fetch_inbox.lock().unwrap().push((name.to_string(), b"<!doctype html><html><body>app</body></html>".to_vec()));
+        })),
+        font_inbox: Some(inbox),
+        ..Default::default()
+    };
+    let mut h = harness_with(blank(), services);
+    h.state_mut().run("app.language.set", json!({"language": "ja"})).unwrap();
+    h.run_steps(4);
+    assert!(h.state_mut().font_needs().downloaded.is_empty());
+    assert_eq!(*requested.borrow(), ["cjk-ja.ttf"], "a failed download is not requested again every frame");
 }
 
 #[test]

@@ -8,17 +8,16 @@ use crate::icons::{self, Icon};
 use crate::l10n::{Localizer, Tr};
 use crate::theme::{self, Tokens};
 
-/// How numbers are typed and shown in number fields: the region's decimal separator and the
-/// workbook's date system (for `10%`-style input). Copy, so a widget can own it.
+/// How number boxes (drag values, slider fields) show and read numbers: the region's decimal
+/// and thousands separators. Copy, so a widget can own it.
 #[derive(Clone, Copy)]
 pub struct NumberStyle {
     region: gridcraft_locale::Regional,
-    system: gridcraft_engine::core::DateSystem,
 }
 
 impl NumberStyle {
-    pub fn new(region: gridcraft_locale::Regional, system: gridcraft_engine::core::DateSystem) -> NumberStyle {
-        NumberStyle { region, system }
+    pub fn new(region: gridcraft_locale::Regional) -> NumberStyle {
+        NumberStyle { region }
     }
 
     /// `n` spelled in the region (`1,5` in de-DE).
@@ -26,19 +25,29 @@ impl NumberStyle {
         gridcraft_engine::core::number_to_text_in(n, &self.region)
     }
 
-    /// A number typed in the region's spelling.
+    /// A plain number typed in the region's spelling (`1,5`, `1.000`, `10%`); a number box reads
+    /// no fractions, dates or times.
     pub fn parse(self, text: &str) -> Option<f64> {
-        gridcraft_engine::core::parse::parse_number_text_in(text, self.system, &self.region)
+        gridcraft_engine::core::parse::parse_plain_number_in(text, &self.region)
+    }
+
+    /// `n` rounded to the widget's decimal places, as egui's own formatter does, then spelled in
+    /// the region (a dragged size shows `12,5`, not `12,499999`).
+    fn shown(self, n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
+        let places = (*decimals.end()).min(15);
+        // `+ 0.0` turns a rounded `-0` into `0`.
+        let rounded = format!("{n:.places$}").parse::<f64>().map_or(n, |r| r + 0.0);
+        self.text(rounded)
     }
 
     /// A drag value that shows and reads numbers in the region's spelling.
     pub fn drag<'a, N: egui::emath::Numeric>(self, value: &'a mut N) -> egui::DragValue<'a> {
-        egui::DragValue::new(value).custom_formatter(move |n, _| self.text(n)).custom_parser(move |s| self.parse(s))
+        egui::DragValue::new(value).custom_formatter(move |n, decimals| self.shown(n, decimals)).custom_parser(move |s| self.parse(s))
     }
 
     /// A slider whose number box shows and reads numbers in the region's spelling.
     pub fn slider<'a, N: egui::emath::Numeric>(self, value: &'a mut N, range: std::ops::RangeInclusive<N>) -> egui::Slider<'a> {
-        egui::Slider::new(value, range).custom_formatter(move |n, _| self.text(n)).custom_parser(move |s| self.parse(s))
+        egui::Slider::new(value, range).custom_formatter(move |n, decimals| self.shown(n, decimals)).custom_parser(move |s| self.parse(s))
     }
 }
 
@@ -244,4 +253,18 @@ pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
         },
     );
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn number_boxes_round_to_the_widget_decimals_in_the_region() {
+        let de = NumberStyle::new(*gridcraft_locale::negotiate_region("de-DE"));
+        assert_eq!(de.shown(12.499_999_9, 0..=1), "12,5");
+        assert_eq!(de.shown(72.0, 0..=0), "72");
+        assert_eq!(de.shown(-0.000_1, 0..=2), "0");
+        assert_eq!(de.shown(1e300, 0..=usize::MAX), de.text(1e300));
+    }
 }

@@ -140,7 +140,7 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{path | text, delimiter?: \",\" (a tab when the first line has one), sheet?: new sheet name, local?: bool (read the delimiter default and the numbers, dates and booleans in the session's region, or the `locale` tag, as Excel's text import does, instead of canonical en-US), locale?} → imports into a new sheet as a table",
             has_doc,
-            from_csv
+            |s, p| from_csv(s, p, "data.fromTextCsv")
         ),
         cmd!(
             nested "data.getData",
@@ -149,7 +149,7 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{path | text, delimiter?, local?: bool, locale?} (CSV/TSV/JSON array of objects; delimiter and values canonical en-US unless `local`, as in data.fromTextCsv) → new sheet table",
             has_doc,
-            from_csv
+            |s, p| from_csv(s, p, "data.getData")
         ),
         cmd!(
             nested "data.fromTableRange",
@@ -668,28 +668,42 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
                 "The headers must remain in the same row, and the resulting table range must overlap the original table range.".into(),
             ));
         }
-        let mut cols = Vec::new();
-        for (i, h) in headers.iter().enumerate() {
-            if h.is_empty() {
-                // A blank header keeps the column that sat at the same sheet position (whatever
-                // language named it); only new columns get a default name.
-                let abs = r.start.col + i as u32;
-                let old = abs.checked_sub(t.range.start.col).and_then(|k| t.columns.get(k as usize)).cloned();
-                let name = format!("{}{}", loc.ui.content("column"), i + 1);
-                cols.push(old.unwrap_or(TableColumn { name, totals: TotalsFn::None, totals_label: None, formula: None }));
+        // A blank header keeps the column that sat at the same sheet position (whatever language
+        // named it), unless a header typed elsewhere in the row claims its name; the rest are new.
+        let mut cols: Vec<Option<TableColumn>> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                if h.is_empty() {
+                    let abs = r.start.col + i as u32;
+                    let old = abs.checked_sub(t.range.start.col).and_then(|k| t.columns.get(k as usize));
+                    return old.filter(|c| !headers.iter().any(|h| h.eq_ignore_ascii_case(&c.name))).cloned();
+                }
+                let existing = t.columns.iter().find(|c| c.name.eq_ignore_ascii_case(h)).cloned();
+                Some(existing.unwrap_or(TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None }))
+            })
+            .collect();
+        // New columns get the first default name no other column uses: structured references
+        // need unique names.
+        let base = loc.ui.content("column");
+        for i in 0..cols.len() {
+            if cols.get(i).is_some_and(Option::is_some) {
                 continue;
             }
-            let existing = t.columns.iter().find(|c| c.name.eq_ignore_ascii_case(h)).cloned();
-            cols.push(existing.unwrap_or(TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None }));
+            let taken = |n: &str| cols.iter().flatten().any(|c| c.name.eq_ignore_ascii_case(n));
+            let name = (i + 1..).map(|k| format!("{base}{k}")).find(|n| !taken(n)).unwrap_or_default();
+            if let Some(slot) = cols.get_mut(i) {
+                *slot = Some(TableColumn { name, totals: TotalsFn::None, totals_label: None, formula: None });
+            }
         }
-        t.columns = cols;
+        t.columns = cols.into_iter().flatten().collect();
         t.range = r;
         cx.structural = true;
         Ok(Json::Null)
     })
 }
 
-fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
+fn from_csv(s: &mut Session, p: &Json, id: &str) -> Result<Json> {
     let bytes = if let Some(t) = str_param(p, "text") {
         t.as_bytes().to_vec()
     } else if let Some(path) = str_param(p, "path") {
@@ -702,7 +716,7 @@ fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
     let mut from_csv_local = false;
     // JSON array of objects → rows.
     let rows: Vec<Vec<Json>> = if text.trim_start().starts_with('[') {
-        let arr: Vec<Json> = serde_json::from_str(&text).map_err(|e| bad("data.getData", e.to_string()))?;
+        let arr: Vec<Json> = serde_json::from_str(&text).map_err(|e| bad(id, e.to_string()))?;
         let mut keys: Vec<String> = Vec::new();
         for o in &arr {
             if let Some(m) = o.as_object() {
@@ -722,8 +736,7 @@ fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
         // Canonical en-US (comma delimiter, `.` decimal) unless the caller asks for the region.
         let loc = if bool_param(p, "local").unwrap_or(false) { crate::locale::call_locale(s, p)? } else { gridcraft_locale::INVARIANT };
         let tabs = text.lines().next().is_some_and(|l| l.contains('\t'));
-        let delim =
-            super::file::delimiter_param(p, "data.getData")?.unwrap_or(if tabs { b'\t' } else { u8::try_from(loc.regional.list).unwrap_or(b',') });
+        let delim = super::file::delimiter_param(p, id)?.unwrap_or(if tabs { b'\t' } else { u8::try_from(loc.regional.list).unwrap_or(b',') });
         // Raw text fields: the typed parse happens once, in `range.setValues` with `local`.
         let opts = gridcraft_xlsx::CsvOptions { delimiter: delim, locale: loc, parse_values: false, ..Default::default() };
         let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
@@ -763,7 +776,11 @@ fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let r = if r.is_single() { crate::selection::current_region(sh, r.start) } else { r };
     let text = crate::display::range_text(&d.wb, d.wb.active_sheet, r);
     // The text is what the sheet displays, in the session's language and region.
-    from_csv(s, &json!({"text": text, "delimiter": "\t", "local": true, "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
+    from_csv(
+        s,
+        &json!({"text": text, "delimiter": "\t", "local": true, "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}),
+        "data.fromTableRange",
+    )
 }
 
 fn queries(s: &mut Session, _: &Json) -> Result<Json> {

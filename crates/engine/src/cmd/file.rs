@@ -51,7 +51,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let imported = matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb))
         || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb);
     let title = if imported {
-        format!("{}.xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or(s.locale().ui.content("book")))
+        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or(s.locale().ui.content("book")))
     } else {
         std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or(s.locale().ui.content("book")).to_string()
     };
@@ -65,7 +65,11 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let i = s.add_document(DocState::new(with_locale(s, wb), path, title));
     if !warnings.is_empty() {
-        s.ui_requests.push(crate::UiRequest::Message(warnings.join("\n\n")));
+        let mut message = warnings.iter().take(5).cloned().collect::<Vec<_>>().join("\n\n");
+        if warnings.len() > 5 {
+            message.push_str(&format!("\n\n{} additional import warnings.", warnings.len() - 5));
+        }
+        s.ui_requests.push(crate::UiRequest::Message(message));
     }
     let d = s.doc()?;
     Ok(
@@ -107,7 +111,8 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let delimiter = delimiter_param(p, "file.saveBytes")?;
     let d = s.doc()?;
     let bytes = crate::io::save_bytes_with(&d.wb, &format!("x.{fmt}"), delimiter)?;
-    let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
+    let name =
+        format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or(s.locale().ui.content("book")));
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 
