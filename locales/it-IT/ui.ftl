@@ -1080,3 +1080,11 @@ ui-border-presets = Bordi predefiniti
 ui-border-preview = Anteprima del bordo
 ui-preview = Anteprima
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = Trascina per riempire le celle. Trascina dall’interno di una cella per selezionare un intervallo.
+
+ui-interface-language = Lingua dell’interfaccia
+ui-ribbon-page-layout-orientation = Orientamento
+ui-ribbon-sheet-options-view = Visualizza
+ui-language-command-set = Lingua dell’interfaccia
+ui-language-command-english = Lingua dell’interfaccia: inglese
+ui-language-command-japanese = Lingua dell’interfaccia: giapponese
+ui-the-text-box-s-worksheet-is-no-longer-active = Il foglio della casella di testo non è più attivo.

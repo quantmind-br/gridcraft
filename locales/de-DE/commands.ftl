@@ -318,3 +318,5 @@ cmd-app-setLocale-label = Sprache und Region festlegen
 cmd-app-getInternational-label = Internationale Einstellungen
 cmd-app-languages-label = Verfügbare Sprachen
 cmd-app-options-label = Optionen…
+cmd-shape-setText-label = Textfeld bearbeiten
+cmd-object-setAnchorMode-label = Objektverankerung

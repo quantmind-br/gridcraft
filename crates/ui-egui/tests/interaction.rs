@@ -186,6 +186,78 @@ fn renders_every_ribbon_tab_without_panicking() {
 }
 
 #[test]
+fn language_switch_translates_the_ribbon_and_persists() {
+    let mut h = harness(blank());
+    // English by default whatever the host's locale: only the desktop app reads the system language.
+    assert_eq!(h.state().session.locale().ui.tag, "en-US");
+    // The language commands are listed with the other UI commands.
+    let ctx = h.ctx.clone();
+    let gridcraft_ui_egui::control::Outcome::Done(listed) = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "engine.commands", &json!({}))
+    else {
+        panic!("engine.commands returns a response");
+    };
+    let ids: Vec<&str> = listed["result"].as_array().into_iter().flatten().filter_map(|c| c["id"].as_str()).collect();
+    for id in ["app.language.set", "app.language.english", "app.language.japanese"] {
+        assert!(ids.contains(&id), "engine.commands lists {id}");
+    }
+    for (code, tag, expected) in
+        [("zh", "zh-CN", "数据"), ("ja", "ja-JP", "データ"), ("ko", "ko-KR", "데이터"), ("ru", "ru-RU", "Данные"), ("pt", "pt-BR", "Dados")]
+    {
+        h.state_mut().run("app.language.set", json!({"language": code})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().session.locale().ui.tag, tag);
+        assert_eq!(h.state().l10n.ribbon_tab("Data").unwrap(), expected);
+        let restored: gridcraft_engine::Prefs = serde_json::from_str(&serde_json::to_string(&h.state().session.prefs).unwrap()).unwrap();
+        assert_eq!(restored.ui_language, tag);
+    }
+    h.state_mut().run("app.language.set", json!({"language": "en"})).unwrap();
+    assert_eq!(h.state().session.locale().ui.tag, "en-US");
+}
+
+#[test]
+fn legacy_ui_language_migrates_once_without_resetting_other_preferences() {
+    let mut app = SheetApp::new(blank(), Default::default());
+    for (code, tag) in [("en", "en-US"), ("pt", "pt-BR"), ("zh", "zh-CN"), ("ja", "ja-JP"), ("ko", "ko-KR"), ("ru", "ru-RU")] {
+        app.session.prefs.ui_language = "system".into();
+        let saved = json!({"language": code, "dark": true});
+        app.ui = serde_json::from_value(saved.clone()).unwrap();
+        assert!(app.migrate_ui_language(&saved));
+        assert_eq!(app.session.prefs.ui_language, tag);
+        assert!(app.ui.dark);
+        assert!(!app.migrate_ui_language(&json!({"language": "ja"})));
+        assert!(serde_json::to_value(&app.ui).unwrap().get("language").is_none());
+    }
+    app.session.prefs.ui_language = "system".into();
+    for saved in [json!({"language": "xx", "dark": true}), json!({"language": 7, "dark": true}), json!({"dark": true})] {
+        app.ui = serde_json::from_value(saved.clone()).unwrap();
+        assert!(!app.migrate_ui_language(&saved));
+        assert_eq!(app.session.prefs.ui_language, "system");
+        assert!(app.ui.dark);
+    }
+}
+
+#[test]
+fn language_commands_negotiate_tags_and_only_set_interface_preference() {
+    let mut app = SheetApp::new(blank(), Default::default());
+    app.run("app.setLocale", json!({"formulaLanguage": "en-US", "regionalFormat": "de-DE"})).unwrap();
+    app.run("app.language.set", json!({"code": "pt-PT"})).unwrap();
+    assert_eq!(app.session.prefs.ui_language, "pt-PT");
+    assert_eq!(app.session.prefs.formula_language, "en-US");
+    assert_eq!(app.session.prefs.regional_format, "de-DE");
+    app.run("app.language.set", json!({"language": "de-AT"})).unwrap();
+    assert_eq!(app.session.prefs.ui_language, "de-DE");
+    assert!(app.run("app.language.set", json!({})).is_err());
+    let error = app.run("app.language.set", json!({"language": "xx"})).unwrap_err();
+    for language in gridcraft_locale::LANGUAGES {
+        assert!(error.contains(language.tag));
+    }
+    app.run("app.language.japanese", json!({})).unwrap();
+    assert_eq!(app.session.prefs.ui_language, "ja-JP");
+    app.run("app.language.english", json!({})).unwrap();
+    assert_eq!(app.session.prefs.ui_language, "en-US");
+}
+
+#[test]
 fn dialogs_open_and_close() {
     let mut h = harness(blank());
     for name in [

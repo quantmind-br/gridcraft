@@ -318,3 +318,5 @@ cmd-app-setLocale-label = Imposta lingua e area geografica
 cmd-app-getInternational-label = Impostazioni internazionali
 cmd-app-languages-label = Lingue disponibili
 cmd-app-options-label = Opzioni…
+cmd-shape-setText-label = Modifica casella di testo
+cmd-object-setAnchorMode-label = Modalità di ancoraggio dell’oggetto

@@ -1078,3 +1078,11 @@ ui-border-presets = Rahmenvorlagen
 ui-border-preview = Rahmenvorschau
 ui-preview = Vorschau
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = Ziehen, um Zellen auszufüllen. Aus dem Zellinneren ziehen, um einen Bereich auszuwählen.
+
+ui-interface-language = Sprache der Benutzeroberfläche
+ui-ribbon-page-layout-orientation = Ausrichtung
+ui-ribbon-sheet-options-view = Anzeigen
+ui-language-command-set = Sprache der Benutzeroberfläche
+ui-language-command-english = Sprache der Benutzeroberfläche: Englisch
+ui-language-command-japanese = Sprache der Benutzeroberfläche: Japanisch
+ui-the-text-box-s-worksheet-is-no-longer-active = Das Arbeitsblatt des Textfelds ist nicht mehr aktiv.

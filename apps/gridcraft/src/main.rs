@@ -115,9 +115,15 @@ fn load_ui_prefs(app: &mut SheetApp) {
     }
     let Some(dir) = config_dir() else { return };
     if let Ok(b) = std::fs::read(dir.join("ui.json"))
-        && let Ok(ui) = serde_json::from_slice(&b)
+        && let Ok(saved) = serde_json::from_slice::<serde_json::Value>(&b)
     {
-        app.ui = ui;
+        if let Ok(ui) = serde_json::from_value::<gridcraft_ui_egui::UiState>(saved.clone()) {
+            app.ui = ui;
+        }
+        if app.migrate_ui_language(&saved) {
+            // Persist immediately: migration happens once, even if the process exits abruptly.
+            write_prefs(&dir, &app.session.prefs);
+        }
     }
 }
 
@@ -134,11 +140,21 @@ fn save_prefs(app: &SheetApp) {
 }
 
 fn services() -> Services {
+    // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
+    let mut clipboard: Option<arboard::Clipboard> = None;
     Services {
+        copy_html: Some(Box::new(move |html, text| {
+            if clipboard.is_none() {
+                clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+            }
+            clipboard.as_mut().ok_or("clipboard unavailable")?.set_html(html, Some(text)).map_err(|e| e.to_string())
+        })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "csv", "tsv", "txt", "json"])
+                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xlsb", "ods", "csv", "tsv", "txt", "json"])
                 .add_filter("Excel Workbook", &["xlsx", "xlsm"])
+                .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
+                .add_filter("OpenDocument Spreadsheet (data import)", &["ods"])
                 .add_filter("CSV", &["csv"])
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
@@ -248,6 +264,7 @@ fn main() -> eframe::Result<()> {
         session.new_workbook();
     }
     let mut app = SheetApp::new(session, services());
+    app.after_engine(); // Show warnings from files opened on the command line.
     let control_port = control_port;
     load_ui_prefs(&mut app);
     let mut viewport = egui::ViewportBuilder::default()

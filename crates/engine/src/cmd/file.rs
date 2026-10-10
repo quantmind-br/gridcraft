@@ -8,7 +8,7 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path, delimiter?: \";\"} | {name, base64, delimiter?} (xlsx, xlsm, csv, tsv, txt, json); text files are read with the session's regional format and, without `delimiter`, split on the region's list separator", always, open),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path, delimiter?: \";\"} | {name, base64, delimiter?} (xlsx, xlsm, xlsb and ods data import, csv, tsv, txt, json); text files are read with the session's regional format and, without `delimiter`, split on the region's list separator", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, delimiter?} (xlsx by default; .csv/.tsv/.json/.html by extension; CSV fields are separated by the region's list separator unless `delimiter` is given)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, delimiter?}", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html, delimiter?} → {base64}", has_doc, save_bytes),
@@ -48,8 +48,15 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let delimiter = delimiter_param(p, "file.open")?;
     let (wb, warnings) = crate::io::open_bytes_with(&name, &bytes, &s.locale(), delimiter)?;
-    let title = std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string();
-    let path = str_param(p, "path").map(str::to_string).filter(|p| crate::io::FileKind::from_path(p) == Some(crate::io::FileKind::Xlsx) || true);
+    let imported = matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb))
+        || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb);
+    let title = if imported {
+        format!("{}.xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or(s.locale().ui.content("book")))
+    } else {
+        std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or(s.locale().ui.content("book")).to_string()
+    };
+    // An import has no save target: ordinary Save must ask for a new destination.
+    let path = str_param(p, "path").filter(|_| !imported).map(str::to_string);
     // Replace an untouched blank Book1 like Excel does.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
@@ -57,6 +64,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     let i = s.add_document(DocState::new(with_locale(s, wb), path, title));
+    if !warnings.is_empty() {
+        s.ui_requests.push(crate::UiRequest::Message(warnings.join("\n\n")));
+    }
     let d = s.doc()?;
     Ok(
         json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings}),

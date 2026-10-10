@@ -1078,3 +1078,11 @@ ui-border-presets = 框線預設
 ui-border-preview = 框線預覽
 ui-preview = 預覽
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = 拖曳以填入儲存格。從儲存格內部拖曳可選取範圍。
+
+ui-interface-language = 介面語言
+ui-ribbon-page-layout-orientation = 紙張方向
+ui-ribbon-sheet-options-view = 螢幕
+ui-language-command-set = 介面語言
+ui-language-command-english = 介面語言：英語
+ui-language-command-japanese = 介面語言：日語
+ui-the-text-box-s-worksheet-is-no-longer-active = 文字方塊所在的工作表已不再使用中。

@@ -76,5 +76,35 @@ The desktop app detects the system language at every start; the choice made with
 `prefs.json` (`~/.config/gridcraft/` on Linux, `~/Library/Application Support/GridCraft/` on macOS, `%APPDATA%\GridCraft\`
 on Windows) and in the browser's `localStorage` (`gridcraft.prefs`) for the web build.
 
+The UI command `app.language.set` accepts `{language: "ja"}` (or the `code` alias) and delegates to
+`app.setLocale {uiLanguage: "ja-JP"}`. Short codes `en`, `pt`, `zh`, `ja`, `ko` and `ru` select
+`en-US`, `pt-BR`, `zh-CN`, `ja-JP`, `ko-KR` and `ru-RU`; full tags and regional variants negotiate
+within a supported language. Unknown languages are rejected. `app.language.english` and
+`app.language.japanese` use the same path. The result is the `app.setLocale` payload plus `language`
+(the resolved tag). These commands change only the interface preference; the formula language
+continues to follow it when `formulaLanguage` is `"followUi"`. Existing document text and canonical
+command ids remain unchanged. Language preferences are saved in `prefs.json`, not `ui.json`.
+
+## Data import and displayed exports
+
+`file.open` supports ODS and XLSB data import, including packages detected by content rather than
+their extension. Imported formula caches become constant values; formulas and number formats
+stored in GridCraft remain canonical. The returned `warnings` describe import limitations and are
+also shown by the UI. An imported document has no save target; Save asks for a new destination.
+ODS and XLSB are import-only formats. Password-protected workbooks return `encrypted-workbook`,
+legacy .xls files return `legacy-workbook`, import failures return `import-failed`, and attempts to
+save as ODS or XLSB return `import-only-format`.
+
+`edit.copy {html: true}` returns an HTML table alongside plain text when within the clipboard limits.
+Both use the workbook’s current locale and displayed cell text; the internal clipboard retains
+canonical formulas and values. HTML file exports use the same displayed-cell path.
+
+`shape.setText {id, text}` edits a text box without interpreting its text as a formula. It is undoable,
+refuses protected sheets (`protected-sheet`) and caps text at 32,767 characters (`text-box-too-long`).
+`object.setAnchorMode {kind: "chart"|"image"|"shape", id, mode: "moveAndSize"|"moveOnly"|"absolute"}`
+controls whether an object moves and/or resizes with cells. Selection-pane entries include `anchorMode`.
+`chart.switchRowColumn {chart?}` switches series orientation, clipping whole-row/column source ranges
+to used cells and returning `chart-range-too-large` if the remaining range exceeds the chart limit.
+
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).

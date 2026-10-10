@@ -749,6 +749,9 @@ pub fn build_params(d: &Dialog, app: &SheetApp) -> Result<Json, String> {
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     let l = app.l10n;
+    if d.name == "pasteSpecial" {
+        paste_special_shortcuts(&mut d, ctx);
+    }
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
@@ -957,6 +960,72 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Paste Special's legacy mnemonics select options; Enter still performs the paste.
+/// Keep the English keytip letters in every language, matching the ribbon access sequences.
+fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
+    if ctx.text_edit_focused() {
+        return;
+    }
+    let right_alt = ctx.input(|i| {
+        i.key_down(Key::AltRight)
+            || i.events.iter().any(|event| {
+                matches!(event, egui::Event::Key { key: Key::AltRight, .. })
+                    || matches!(event, egui::Event::Key { physical_key: Some(Key::AltRight), .. })
+            })
+    });
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let allowed = |m: egui::Modifiers| !m.ctrl && !m.command && !m.mac_cmd && !(m.alt && (mac || right_alt));
+    let mnemonic = |key| match key {
+        Key::T => Some('t'),
+        Key::V => Some('v'),
+        Key::F => Some('f'),
+        Key::C => Some('c'),
+        Key::E => Some('e'),
+        _ => None,
+    };
+    let mut text_to_consume = Vec::new();
+    for event in ctx.input(|i| i.events.clone()) {
+        let egui::Event::Key { key, pressed: true, repeat, modifiers, .. } = event else { continue };
+        if !allowed(modifiers) {
+            continue;
+        }
+        let Some(letter) = mnemonic(key) else { continue };
+        text_to_consume.push(letter);
+        if repeat {
+            continue;
+        }
+        if key == Key::E {
+            let transpose = d.values.get("transpose").and_then(Json::as_bool).unwrap_or(false);
+            d.values.insert("transpose".into(), json!(!transpose));
+        } else {
+            let what = match key {
+                Key::T => "formats",
+                Key::V => "values",
+                Key::F => "formulas",
+                _ => "comments",
+            };
+            d.values.insert("what".into(), json!(what));
+        }
+    }
+    // Browsers can deliver Text before or after Key. Act only on Key, then remove
+    // its matching text so one physical press cannot toggle Transpose twice.
+    ctx.input_mut(|i| {
+        i.events.retain(|event| match event {
+            egui::Event::Key { key, modifiers, .. } => !(allowed(*modifiers) && mnemonic(*key).is_some()),
+            egui::Event::Text(text) if text.len() == 1 => {
+                let letter = text.chars().next().unwrap_or_default().to_ascii_lowercase();
+                if let Some(index) = text_to_consume.iter().position(|&c| c == letter) {
+                    text_to_consume.remove(index);
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        });
+    });
+}
+
 fn ok_cancel(ui: &mut egui::Ui, l: Localizer, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1028,7 +1097,19 @@ fn form(ui: &mut egui::Ui, l: Localizer, numbers: crate::widgets::NumberStyle, d
                         ui.label(egui::RichText::new(shown(l, label)).strong());
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                         for (val, text) in options {
-                            if ui.radio(cur == val, &*shown(l, text)).clicked() {
+                            let text = shown(l, text);
+                            let text = if d.name == "pasteSpecial" && key == "what" {
+                                match val {
+                                    "formulas" => std::borrow::Cow::Owned(format!("{text} (F)")),
+                                    "values" => std::borrow::Cow::Owned(format!("{text} (V)")),
+                                    "formats" => std::borrow::Cow::Owned(format!("{text} (T)")),
+                                    "comments" => std::borrow::Cow::Owned(format!("{text} (C)")),
+                                    _ => text,
+                                }
+                            } else {
+                                text
+                            };
+                            if ui.radio(cur == val, text).clicked() {
                                 d.values.insert(key.into(), json!(val));
                             }
                         }
@@ -1036,7 +1117,9 @@ fn form(ui: &mut egui::Ui, l: Localizer, numbers: crate::widgets::NumberStyle, d
                 }
                 Field::Check { key, label } => {
                     let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-                    if ui.checkbox(&mut b, &*shown(l, label)).changed() {
+                    let label = shown(l, label);
+                    let label = if d.name == "pasteSpecial" && key == "transpose" { std::borrow::Cow::Owned(format!("{label} (E)")) } else { label };
+                    if ui.checkbox(&mut b, label).changed() {
                         d.values.insert(key.into(), json!(b));
                     }
                 }

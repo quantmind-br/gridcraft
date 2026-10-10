@@ -43,8 +43,16 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut app = SheetApp::new(session, services(inbox.clone(), cc.egui_ctx.clone()));
-                    if let Some(ui) = load_json(UI_KEY) {
-                        app.ui = ui;
+                    if let Some(saved) = load_json::<serde_json::Value>(UI_KEY) {
+                        if let Ok(ui) = serde_json::from_value(saved.clone()) {
+                            app.ui = ui;
+                        }
+                        if app.migrate_ui_language(&saved)
+                            && let Some(storage) = storage()
+                            && let Ok(prefs) = serde_json::to_string(&app.session.prefs)
+                        {
+                            let _ = storage.set_item(PREFS_KEY, &prefs);
+                        }
                     }
                     SheetApp::setup_context(&cc.egui_ctx, app.ui.dark);
                     Ok(Box::new(WebShell::new(app, inbox)))
@@ -166,12 +174,15 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let fetch_inbox = font_inbox.clone();
     let fetch_ctx = ctx.clone();
     Services {
+        copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) =
-                    rfd::AsyncFileDialog::new().add_filter("Spreadsheets", &["xlsx", "xlsm", "csv", "tsv", "txt", "json"]).pick_file().await
+                let Some(file) = rfd::AsyncFileDialog::new()
+                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                    .pick_file()
+                    .await
                 else {
                     return;
                 };
@@ -223,6 +234,39 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     }
     let buffer = wasm_bindgen_futures::JsFuture::from(response.array_buffer().map_err(js)?).await.map_err(js)?;
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}
+
+/// Start inside the copy gesture; deferring `write` can lose browser user activation.
+fn copy_html(html: &str, text: &str) -> Result<(), String> {
+    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let clipboard = window.navigator().clipboard();
+    if clipboard.is_undefined() || clipboard.is_null() {
+        return Err("browser clipboard is unavailable (a secure context is required)".into());
+    }
+    if !js_sys::Reflect::get(&clipboard, &"write".into()).map_err(js)?.is_function() {
+        return Err("browser does not support rich clipboard writes".into());
+    }
+    let data = js_sys::Object::new();
+    for (mime, value) in [("text/html", html), ("text/plain", text)] {
+        let opts = web_sys::BlobPropertyBag::new();
+        opts.set_type(mime);
+        let parts = js_sys::Array::of1(&wasm_bindgen::JsValue::from_str(value));
+        let blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts).map_err(js)?;
+        js_sys::Reflect::set(&data, &mime.into(), &blob).map_err(js)?;
+    }
+    let item = web_sys::ClipboardItem::new_with_record_from_str_to_blob_promise(&data).map_err(js)?;
+    let promise = clipboard.write(&js_sys::Array::of1(&item));
+    let text = text.to_owned();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = wasm_bindgen_futures::JsFuture::from(promise).await {
+            log::warn!("Rich clipboard write failed; trying plain text: {e:?}");
+            if let Err(e) = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&text)).await {
+                log::error!("Plain-text clipboard fallback also failed: {e:?}");
+            }
+        }
+    });
+    Ok(())
 }
 
 /// Triggers a browser download of `bytes`.

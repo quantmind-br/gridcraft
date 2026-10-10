@@ -17,24 +17,37 @@ pub mod formula_bar;
 pub mod grid;
 pub mod icons;
 pub mod keymap;
+pub mod keytips;
 pub mod l10n;
 pub mod options;
 pub mod panes;
 pub mod pivot_pane;
 pub mod ribbon;
 pub mod tabs;
+pub mod text_box;
 pub mod theme;
 pub mod widgets;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::l10n::Tr;
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::{EngineError, Session, UiRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 pub use control::{ControlRequest, ControlResponse};
+
+/// Accept upstream short codes and supported language tags, including regional variants.
+fn interface_language(code: &str) -> Option<&'static gridcraft_locale::Language> {
+    let normalized = code.trim().replace('_', "-");
+    let primary = normalized.split(['-', '.']).next()?.to_ascii_lowercase();
+    if !gridcraft_locale::LANGUAGES.iter().any(|l| l.tag.split('-').next().is_some_and(|p| p.eq_ignore_ascii_case(&primary))) {
+        return None;
+    }
+    Some(gridcraft_locale::negotiate_language(&normalized))
+}
 
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,6 +113,9 @@ pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
     pub open_url: Option<Box<dyn Fn(&str)>>,
+    /// Publish HTML and its plain-text alternative together. `Ok` means the host owns the
+    /// write (including any asynchronous fallback); an immediate error uses egui's text path.
+    pub copy_html: Option<Box<dyn FnMut(&str, &str) -> Result<(), String>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
@@ -131,6 +147,7 @@ pub struct SheetApp {
     pub ui: UiState,
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
+    pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
@@ -156,6 +173,8 @@ pub struct SheetApp {
     font_requested: Option<&'static str>,
     effective_dark: bool,
     pub name_box: Option<String>,
+    /// Transient ribbon keyboard navigation; never saved with UI preferences.
+    pub keytips: keytips::KeyTips,
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
@@ -172,6 +191,7 @@ impl SheetApp {
             ui: UiState::default(),
             views: HashMap::new(),
             editor: None,
+            text_box_editor: None,
             dialog: None,
             message: None,
             toast: None,
@@ -195,6 +215,7 @@ impl SheetApp {
             font_requested: None,
             effective_dark: false,
             name_box: None,
+            keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
             selected_chart: None,
             started: now_ms(),
@@ -208,6 +229,26 @@ impl SheetApp {
         theme::apply(ctx, dark);
     }
 
+    /// Import the old interface-only preference only while the engine follows the system.
+    /// Unknown or malformed values are ignored without resetting other UI preferences.
+    pub fn migrate_ui_language(&mut self, saved: &Json) -> bool {
+        if self.session.prefs.ui_language != "system" {
+            return false;
+        }
+        saved.get("language").and_then(Json::as_str).is_some_and(|code| self.set_interface_language(code).is_ok())
+    }
+
+    fn set_interface_language(&mut self, code: &str) -> Result<Json, String> {
+        let Some(language) = interface_language(code) else {
+            let available = gridcraft_locale::LANGUAGES.iter().map(|l| l.tag).collect::<Vec<_>>().join(", ");
+            return Err(format!("unknown language {code:?} (available: {available})"));
+        };
+        let mut result = self.session.run("app.setLocale", json!({"uiLanguage": language.tag}))?;
+        self.after_engine();
+        result["language"] = json!(language.tag);
+        Ok(result)
+    }
+
     /// Runs an engine command (or a UI command) and handles UI requests it makes. Errors are the
     /// engine's English text, which the control channel and tests read.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
@@ -216,6 +257,29 @@ impl SheetApp {
 
     /// Like [`SheetApp::run`], with the structured error that [`SheetApp::alert`] translates.
     pub fn run_typed(&mut self, id: &str, params: Json) -> Result<Json, EngineError> {
+        if id.starts_with("file.")
+            || matches!(
+                id,
+                "window.activate"
+                    | "sheet.activate"
+                    | "sheet.next"
+                    | "sheet.previous"
+                    | "sheet.move"
+                    | "sheet.hide"
+                    | "sheet.unhide"
+                    | "view.newWindow"
+                    | "view.hideWindow"
+                    | "view.unhideWindow"
+                    | "home.insertSheet"
+                    | "home.deleteSheet"
+                    | "edit.undo"
+                    | "edit.redo"
+                    | "object.delete"
+                    | "object.move"
+            )
+        {
+            self.commit_text_box_edit()?;
+        }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r.map_err(EngineError::Other);
         }
@@ -224,8 +288,24 @@ impl SheetApp {
         r
     }
 
-    /// Runs a command and shows its error (for menu/ribbon clicks): a command that is not
-    /// available right now is a toast, anything else a message box.
+    /// Copy or cut the selected cells to the system clipboard. Engine-only commands keep
+    /// their existing internal clipboard behavior and do not write to the host clipboard.
+    pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
+        // Only ask the engine for HTML when the host can publish it.
+        let Ok(result) = self.run(command, json!({"html": self.services.copy_html.is_some()})) else { return };
+        let Some(text) = result.get("text").and_then(Json::as_str) else { return };
+        if let Some(html) = result.get("html").and_then(Json::as_str)
+            && let Some(copy_html) = &mut self.services.copy_html
+        {
+            match copy_html(html, text) {
+                Ok(()) => return,
+                Err(error) => log::warn!("HTML clipboard unavailable; copying plain text: {error}"),
+            }
+        }
+        ctx.copy_text(text.to_string());
+    }
+
+    /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
         if let Err(e) = self.run_typed(id, params) {
             self.alert(&e);
@@ -249,11 +329,14 @@ impl SheetApp {
         if let EngineError::BadParams { msg, .. } = e {
             return msg.clone();
         }
+        if let EngineError::Other(message) = e {
+            return self.l10n.tr(message).into_owned();
+        }
         let args = e.args();
         let args: Vec<(&str, l10n::Arg)> = args.iter().map(|(k, v)| (*k, l10n::Arg::from(v))).collect();
         match self.l10n.error(e.code(), &args) {
             Some(text) => text.into_owned(),
-            None => clean_error(&e.to_string()),
+            None => self.l10n.tr(&clean_error(&e.to_string())).into_owned(),
         }
     }
 
@@ -334,6 +417,12 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.zoom100" => return Some(self.session.run("view.zoom", json!({"percent": 100})).inspect(|_| self.after_engine())),
+            "app.language.set" => {
+                let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
+                self.set_interface_language(code)
+            }
+            "app.language.english" => self.set_interface_language("en-US"),
+            "app.language.japanese" => self.set_interface_language("ja-JP"),
             "ui.dialog" => {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
@@ -434,6 +523,10 @@ impl SheetApp {
     }
 
     pub fn open_dialog(&mut self, name: &str, params: Json) {
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some((self.l10n.tr("Text Box").into_owned(), self.error_text(&e)));
+            return;
+        }
         match name {
             "open" => {
                 if let Some(start) = &self.services.open_async {
@@ -493,6 +586,10 @@ impl SheetApp {
     /// language.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
         let loc = self.session.locale();
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some((self.l10n.tr("Text Box").into_owned(), self.error_text(&e)));
+            return;
+        }
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
@@ -630,7 +727,9 @@ impl SheetApp {
             return;
         }
         let t0 = now_ms();
+        text_box::before_ui(self, &ctx);
         let t = theme::Tokens::get(&ctx);
+        self.ribbon_keys(&ctx);
         ribbon::title_bar(self, ui);
         ribbon::show(self, ui);
         if self.ui.formula_bar {
@@ -667,6 +766,7 @@ impl SheetApp {
         // AutoSave: save workbooks that have a file shortly after they change.
         if self.grid.autosave
             && self.editor.is_none()
+            && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
             && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
         {
@@ -681,6 +781,43 @@ impl SheetApp {
             if self.grid.last_title.as_deref() != Some(title.as_str()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);
+            }
+        }
+    }
+
+    fn ribbon_keys(&mut self, ctx: &egui::Context) {
+        let before = self.keytips.prefix().map(str::to_string);
+        let enabled = self.editor.is_none()
+            && self.dialog.is_none()
+            && self.message.is_none()
+            && self.name_box.is_none()
+            && !ctx.text_edit_focused()
+            && self.grid.context_menu.is_none()
+            && self.grid.header_menu.is_none()
+            && self.grid.filter_menu.is_none()
+            && self.grid.list_picker.is_none()
+            && self.grid.renaming_tab.is_none()
+            && (before.is_some() || !egui::Popup::is_any_open(ctx));
+        let actions = self.keytips.process(ctx, enabled);
+        if before.is_some() && before.as_deref() != self.keytips.prefix() && !ctx.input(|i| i.pointer.any_pressed()) {
+            // Leave pointer cancellation to the popup so clicking a menu item still works.
+            egui::Popup::close_all(ctx);
+        }
+        // The legacy Edit/Format paths lead to the same existing Home menus. Switch once, when
+        // the prefix changes, not every frame (that would reset a tab the user picked meanwhile).
+        let after = self.keytips.prefix();
+        if after != before.as_deref() && matches!(after, Some("E" | "O" | "OC")) {
+            self.run_or_alert("ui.ribbonTab", json!({"tab": "Home"}));
+            self.ui.ribbon_collapsed = false;
+        }
+        for action in actions {
+            match action {
+                keytips::Action::Home => {
+                    self.run_or_alert("ui.ribbonTab", json!({"tab": "Home"}));
+                    self.ui.ribbon_collapsed = false;
+                }
+                keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
+                keytips::Action::Dialog(name) => self.open_dialog(name, json!({})),
             }
         }
     }

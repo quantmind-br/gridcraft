@@ -1077,3 +1077,11 @@ ui-border-presets = 边框预设
 ui-border-preview = 边框预览
 ui-preview = 预览
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = 拖动以填充单元格。从单元格内部拖动可选择区域。
+
+ui-interface-language = 界面语言
+ui-ribbon-page-layout-orientation = 纸张方向
+ui-ribbon-sheet-options-view = 屏幕
+ui-language-command-set = 界面语言
+ui-language-command-english = 界面语言：英语
+ui-language-command-japanese = 界面语言：日语
+ui-the-text-box-s-worksheet-is-no-longer-active = 文本框所在的工作表不再处于活动状态。

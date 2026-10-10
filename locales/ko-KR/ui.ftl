@@ -1081,3 +1081,11 @@ ui-border-presets = 테두리 미리 설정
 ui-border-preview = 테두리 미리 보기
 ui-preview = 미리 보기
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = 끌어서 셀을 채웁니다. 셀 안쪽에서 끌면 범위를 선택합니다.
+
+ui-interface-language = 인터페이스 언어
+ui-ribbon-page-layout-orientation = 용지 방향
+ui-ribbon-sheet-options-view = 화면
+ui-language-command-set = 인터페이스 언어
+ui-language-command-english = 인터페이스 언어: 영어
+ui-language-command-japanese = 인터페이스 언어: 일본어
+ui-the-text-box-s-worksheet-is-no-longer-active = 텍스트 상자의 워크시트가 더 이상 활성 상태가 아닙니다.

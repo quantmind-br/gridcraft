@@ -318,3 +318,5 @@ cmd-app-setLocale-label = 언어 및 지역 설정
 cmd-app-getInternational-label = 국제 설정
 cmd-app-languages-label = 사용 가능한 언어
 cmd-app-options-label = 옵션…
+cmd-shape-setText-label = 텍스트 상자 편집
+cmd-object-setAnchorMode-label = 개체 고정 방식

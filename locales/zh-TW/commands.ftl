@@ -318,3 +318,5 @@ cmd-app-setLocale-label = 設定語言和地區
 cmd-app-getInternational-label = 國際設定
 cmd-app-languages-label = 可用語言
 cmd-app-options-label = 選項…
+cmd-shape-setText-label = 編輯文字方塊
+cmd-object-setAnchorMode-label = 物件定位方式

@@ -84,15 +84,17 @@
 - **Compatible.** XLSX is the native format: styles, themes, formulas (including dynamic arrays),
   tables, conditional formats, validation, comments, hyperlinks, charts, pictures, sparklines,
   PivotTables and print settings round-trip. CSV and TSV too.
+  [XLSB worksheet data can be imported](docs/xlsb-import.md), using saved values instead of formulas.
+  [ODS worksheet data can be imported](docs/ods-import.md), using saved values instead of formulas.
 - **Capable.** A dependency-graph calculation engine with dynamic arrays and spilling,
   500+ worksheet functions plus LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL and MAKEARRAY,
   structured table references, Excel's full number-format language, sort and AutoFilter,
   Flash Fill, data validation, outlining and subtotals.
 - **Fast.** Copy-on-write workbooks (undo snapshots are nearly free), incremental recalculation,
   and a virtualised grid that only lays out what's on screen.
-- **Multilingual.** The interface and the formula language in 11 languages, the way Excel does
-  it: `=SOMA(1,5;2)` in Portuguese, `=SUMME(1,5;2)` in German, `=SUM(1.5,2)` in English, with the
-  same canonical file underneath.
+- **Multilingual.** The interface and the formula language in 12 languages, the way Excel does
+  it: `=SOMA(1,5;2)` in Portuguese, `=SUMME(1,5;2)` in German, `=СУММ(1,5;2)` in Russian,
+  `=SUM(1.5,2)` in English, with the same canonical file underneath.
 - **Agent-native.** Every ribbon button, menu item, dialog, keystroke and mouse gesture is a
   command that agents can run over a JSON control channel, an **MCP server**, or the CLI.
 - **Everywhere.** One Rust codebase for desktop and the web. No subscription, no licence server,
@@ -117,6 +119,30 @@ cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sa
 
 You need [trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target. Open uses the
 browser's file picker (dropping files works too) and Save downloads the workbook.
+
+### Ribbon access keys
+
+Press and release **left Alt** on Windows/Linux/BSD, or press **F10** on any platform,
+then type a sequence below one key at a time. Keytips appear on the supported Home
+controls and menu items. On macOS, use F10 (Fn+F10 if required by your keyboard); Option
+remains available for entering accented characters.
+
+| Sequence after Alt/F10 | Action |
+|---|---|
+| `H A L` / `H A C` / `H A R` | Align left / center / right |
+| `H V S` or legacy `E S` | Open Paste Special |
+| `H O I` or legacy `O C A` | AutoFit selected columns |
+
+In Paste Special, **T/V/F/C** select formats/values/formulas/comments, and **E** toggles
+Transpose. **Enter** applies the selected options; **Escape** cancels the dialog.
+These letters also work with Alt held on Windows/Linux/BSD.
+
+Escape backs out one keytip level; Alt/F10 again exits keytips. Clicking, scrolling,
+or switching windows cancels navigation. Access keys do not start while editing text
+or using another dialog. This is initial support for these Home and legacy paths;
+other ribbon commands and full mouse-free navigation remain to be implemented.
+Browsers or desktop environments may reserve Alt/F10 for their own menus. The keytip letters
+are the English ones in every interface language.
 
 ### Logs
 
@@ -157,7 +183,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 |---|---|
 | L0 | `core` (addresses, values, errors, dates, input parsing) · `numfmt` (number format codes) · `locale` (formula languages and regional formats) |
 | L1 | `formula` (lexer, parser, printer, reference adjustment) · `functions` (worksheet function library) |
-| L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX and CSV) |
+| L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX, CSV, plus XLSB and ODS data import) |
 | L3 | `chart` (toolkit-free chart layout and rendering) |
 | L4 | `l10n` (interface messages in Fluent, localized keyboard shortcuts) |
 | L5 | `engine` (session, commands, history, clipboard, fill, sort, filter, file I/O) |

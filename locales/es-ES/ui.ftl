@@ -1078,3 +1078,11 @@ ui-border-presets = Bordes predefinidos
 ui-border-preview = Vista previa del borde
 ui-preview = Vista previa
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = Arrastre para rellenar celdas. Arrastre desde el interior de una celda para seleccionar un rango.
+
+ui-interface-language = Idioma de la interfaz
+ui-ribbon-page-layout-orientation = Orientación
+ui-ribbon-sheet-options-view = Ver
+ui-language-command-set = Idioma de la interfaz
+ui-language-command-english = Idioma de la interfaz: inglés
+ui-language-command-japanese = Idioma de la interfaz: japonés
+ui-the-text-box-s-worksheet-is-no-longer-active = La hoja del cuadro de texto ya no está activa.

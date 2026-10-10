@@ -197,6 +197,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         if resp.double_clicked() {
                             app.ui.ribbon_collapsed = !collapsed;
                         }
+                        if tab == "Home" && app.keytips.prefix() == Some("") {
+                            keytip(app, ui, "H", pos2(r.center().x, r.bottom() - 1.0));
+                        }
                     }
                 });
             });
@@ -270,7 +273,7 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if app.selected_chart.is_some() {
+        if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
         }
     }
@@ -307,6 +310,19 @@ fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
     app.run_or_alert(id, params);
 }
 
+/// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
+/// Keep the English keytip letters in every language so access sequences stay stable.
+fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
+    let Some(rest) = app.keytips.prefix().and_then(|prefix| sequence.strip_prefix(prefix)).filter(|s| !s.is_empty()) else { return };
+    let t = Tokens::get(ui.ctx());
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
+    let text = painter.layout_no_wrap(rest.into(), theme::ui_bold(10.5), t.text);
+    let rect = Rect::from_center_size(at, text.size() + vec2(7.0, 3.0));
+    painter.rect_filled(rect, 2.0, t.input_bg);
+    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
+    painter.galley(rect.min + vec2(3.5, 1.5), text, t.text);
+}
+
 /// Menu entries are `(English label, command id or "dialog:<name>", params)`; `"-"` is a separator.
 fn menu_items(app: &mut SheetApp, ui: &mut Ui, l: Localizer, items: &[(&str, &str, serde_json::Value)]) {
     for (label, id, p) in items {
@@ -314,7 +330,18 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, l: Localizer, items: &[(&str, &st
             ui.separator();
             continue;
         }
-        if ui.add(egui::Button::new(&*l.tr(label)).frame(false).min_size(vec2(220.0, 22.0))).clicked() {
+        let response = ui.add(egui::Button::new(&*l.tr(label)).frame(false).min_size(vec2(220.0, 22.0)));
+        let sequence = match (app.keytips.prefix(), *id) {
+            (Some("HV"), "dialog:pasteSpecial") => Some("HVS"),
+            (Some("E"), "dialog:pasteSpecial") => Some("ES"),
+            (Some("HO"), "home.autofitColumnWidth") => Some("HOI"),
+            (Some("OC"), "home.autofitColumnWidth") => Some("OCA"),
+            _ => None,
+        };
+        if let Some(sequence) = sequence {
+            keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
+        }
+        if response.clicked() {
             if let Some(d) = id.strip_prefix("dialog:") {
                 app.open_dialog(d, p.clone());
             } else {
@@ -331,6 +358,9 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     let formula_lang = app.session.locale().formula;
     // Clipboard
     let paste = big_button(ui, Icon::Paste, &l.tr("Paste"), &tip(&l, app.keymap.platform(), "Paste", "edit.paste"), true);
+    if app.keytips.prefix() == Some("H") {
+        keytip(app, ui, "HV", paste.rect.center_bottom());
+    }
     if paste.clicked() {
         if let Some(text) = app.grid.system_clipboard.take() {
             act(app, "edit.paste", json!({"text": text}));
@@ -338,7 +368,29 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "edit.paste", json!({}));
         }
     }
-    egui::Popup::context_menu(&paste).show(|ui| {
+    let paste_keys = matches!(app.keytips.prefix(), Some("HV" | "E"));
+    // Keep a keyboard-opened menu anchored to the button when a pointer click
+    // cancels keytips, so its items remain in place and can still be clicked.
+    let anchor_id = paste.id.with("keytip_anchor");
+    let anchored = ui.ctx().data_mut(|data| {
+        let anchored = if paste_keys {
+            true
+        } else if paste.secondary_clicked() {
+            false
+        } else {
+            data.get_temp::<bool>(anchor_id).unwrap_or(false)
+        };
+        data.insert_temp(anchor_id, anchored);
+        anchored
+    });
+    let mut paste_popup = egui::Popup::context_menu(&paste);
+    if anchored {
+        paste_popup = paste_popup.anchor(&paste);
+    }
+    if paste_keys {
+        paste_popup = paste_popup.open_memory(egui::SetOpenCommand::Bool(true));
+    }
+    paste_popup.show(|ui| {
         menu_items(
             app,
             ui,
@@ -356,17 +408,11 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     ui.vertical(|ui| {
-        if icon_button(ui, Icon::Cut, t.text, &tip(&l, app.keymap.platform(), "Cut", "edit.cut"), vec2(26.0, 23.0)).clicked()
-            && let Ok(r) = app.run("edit.cut", json!({}))
-            && let Some(s) = r.get("text").and_then(|x| x.as_str())
-        {
-            ui.ctx().copy_text(s.to_string());
+        if icon_button(ui, Icon::Cut, t.text, &tip(&l, app.keymap.platform(), "Cut", "edit.cut"), vec2(26.0, 23.0)).clicked() {
+            app.copy_to_clipboard(ui.ctx(), "edit.cut");
         }
-        if icon_button(ui, Icon::Copy, t.text, &tip(&l, app.keymap.platform(), "Copy", "edit.copy"), vec2(26.0, 23.0)).clicked()
-            && let Ok(r) = app.run("edit.copy", json!({}))
-            && let Some(s) = r.get("text").and_then(|x| x.as_str())
-        {
-            ui.ctx().copy_text(s.to_string());
+        if icon_button(ui, Icon::Copy, t.text, &tip(&l, app.keymap.platform(), "Copy", "edit.copy"), vec2(26.0, 23.0)).clicked() {
+            app.copy_to_clipboard(ui.ctx(), "edit.copy");
         }
         let fp_on = app.session.format_painter.is_some();
         let fp = toggle_button(ui, Icon::Brush, fp_on, &l.tr("Format Painter (double-click to keep it on)"));
@@ -525,7 +571,16 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                 (Icon::AlignCenter, HAlign::Center, "home.alignCenter", msg!("Center")),
                 (Icon::AlignRight, HAlign::Right, "home.alignRight", msg!("Align Right")),
             ] {
-                if toggle_button(ui, icon, st.align.h == h, &l.tr(caption)).clicked() {
+                let response = toggle_button(ui, icon, st.align.h == h, &l.tr(caption));
+                if matches!(app.keytips.prefix(), Some("H" | "HA")) {
+                    let sequence = match h {
+                        HAlign::Left => "HAL",
+                        HAlign::Center => "HAC",
+                        _ => "HAR",
+                    };
+                    keytip(app, ui, sequence, response.rect.center_bottom());
+                }
+                if response.clicked() {
                     act(app, id, json!({}));
                 }
             }
@@ -649,7 +704,17 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             );
         });
         let fmt = small_button(ui, Icon::Format, &l.tr("Format"), &l.tr("Format"), true);
-        egui::Popup::menu(&fmt).show(|ui| {
+        match app.keytips.prefix() {
+            Some("H") => keytip(app, ui, "HO", fmt.rect.center_bottom()),
+            Some("O") => keytip(app, ui, "OC", fmt.rect.center_bottom()),
+            _ => {}
+        }
+        let format_keys = matches!(app.keytips.prefix(), Some("HO" | "OC"));
+        let mut format_popup = egui::Popup::menu(&fmt);
+        if format_keys {
+            format_popup = format_popup.open_memory(egui::SetOpenCommand::Bool(true));
+        }
+        format_popup.show(|ui| {
             menu_items(
                 app,
                 ui,
@@ -1359,7 +1424,8 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    let o = big_button(ui, Icon::Orient, &l.tr("Orientation"), &l.tr("Orientation"), true);
+    let orientation = l.text("ui-ribbon-page-layout-orientation", &[]);
+    let o = big_button(ui, Icon::Orient, &orientation, &orientation, true);
     egui::Popup::menu(&o).show(|ui| {
         menu_items(
             app,
@@ -1413,25 +1479,29 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
         .active()
         .and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings, s.print.gridlines, s.print.headings)))
         .unwrap_or((true, true, false, false));
+    // These two checkboxes mean the screen view vs. the printed page. English shows "View" (as in
+    // Excel), but the key is distinct from the "View" tab so languages can word them apart.
+    let screen = l.text("ui-ribbon-sheet-options-view", &[]);
+    let print = l.tr("Print");
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(l.tr("Gridlines")).strong().small());
         let mut v = sh.0;
-        if ui.checkbox(&mut v, l.tr("View")).changed() {
+        if ui.checkbox(&mut v, &*screen).changed() {
             act(app, "view.gridlines", json!({"on": v}));
         }
         let mut p = sh.2;
-        if ui.checkbox(&mut p, l.tr("Print")).changed() {
+        if ui.checkbox(&mut p, &*print).changed() {
             act(app, "pageLayout.printGridlines", json!({"on": p}));
         }
     });
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(l.tr("Headings")).strong().small());
         let mut v = sh.1;
-        if ui.checkbox(&mut v, l.tr("View")).changed() {
+        if ui.checkbox(&mut v, &*screen).changed() {
             act(app, "view.headings", json!({"on": v}));
         }
         let mut p = sh.3;
-        if ui.checkbox(&mut p, l.tr("Print")).changed() {
+        if ui.checkbox(&mut p, &*print).changed() {
             act(app, "pageLayout.printHeadings", json!({"on": p}));
         }
     });
@@ -1710,7 +1780,6 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
 fn view(app: &mut SheetApp, ui: &mut Ui) {
     let l = app.l10n;
     let t = Tokens::get(ui.ctx());
-    let _ = t;
     for (icon, label, cmd) in [
         (Icon::Normal, l.tr("Normal"), "view.normal"),
         (Icon::PageBreak, l.text("ui-ribbon-label-page-break-preview", &[]), "view.pageBreakPreview"),
@@ -1722,6 +1791,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
     }
     sep(ui);
     let s = app.session.active().and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings))).unwrap_or((true, true));
+    let lang = app.session.locale().ui;
     ui.vertical(|ui| {
         let mut fb = app.ui.formula_bar;
         if ui.checkbox(&mut fb, l.tr("Formula Bar")).changed() {
@@ -1774,6 +1844,22 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
+    });
+    sep(ui);
+    // Interface language: settings live in the View tab, like Excel's Options. The label follows
+    // the current language so it stays readable; the choices are always shown in their own script.
+    ui.vertical(|ui| {
+        ui.label(egui::RichText::new(l.tr("Interface language")).font(theme::ui_font(11.5)).color(t.text_dim));
+        egui::ComboBox::from_id_salt("ui_language")
+            .width(120.0)
+            .selected_text(egui::RichText::new(lang.native_name).font(theme::ui_font(12.5)))
+            .show_ui(ui, |ui| {
+                for language in gridcraft_locale::LANGUAGES {
+                    if ui.selectable_label(language.tag == lang.tag, language.native_name).clicked() {
+                        act(app, "app.language.set", json!({"language": language.tag}));
+                    }
+                }
+            });
     });
 }
 

@@ -111,6 +111,110 @@ fn undo_redo() {
 }
 
 #[test]
+fn shape_text_edit_undo_redo_and_noop() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"at": "C4", "width": 210, "height": 90, "text": "Original"})).unwrap()["shape"].clone();
+    let original = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    let mut changed = original.clone();
+    changed.text = "First line\n\nSecond line & <text>".into();
+    let undo_len = s.doc().unwrap().undo.len();
+    s.execute("shape.setText", json!({"id": id, "text": changed.text})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], changed);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], original);
+
+    let before_noop = s.doc().unwrap().wb.clone();
+    let revision = s.doc().unwrap().revision;
+    s.execute("shape.setText", json!({"id": id, "text": "Original"})).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before_noop));
+    assert_eq!(s.doc().unwrap().revision, revision);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    assert_eq!(s.doc().unwrap().redo.len(), 1);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], changed);
+
+    s.execute("shape.setText", json!({"id": id, "text": ""})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text, "");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], changed);
+}
+
+#[test]
+fn shape_text_rejects_invalid_targets_and_params() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();
+    let rectangle = s.execute("insert.shape", json!({"kind": "rectangle", "text": "Rectangle"})).unwrap()["shape"].clone();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    for params in [
+        json!({}),
+        json!({"id": id}),
+        json!({"id": id, "text": 12}),
+        json!({"id": "1", "text": "bad id"}),
+        json!({"id": -1, "text": "bad id"}),
+        json!({"id": 1.5, "text": "bad id"}),
+        json!({"id": u64::from(u32::MAX) + 1, "text": "bad id"}),
+        json!({"id": 999, "text": "unknown"}),
+        json!({"id": rectangle, "text": "not a text box"}),
+    ] {
+        assert!(matches!(s.execute("shape.setText", params), Err(crate::EngineError::BadParams { .. })));
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+        assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    }
+    s.execute("home.insertSheet", json!({})).unwrap();
+    assert!(matches!(s.execute("shape.setText", json!({"id": id, "text": "wrong sheet"})), Err(crate::EngineError::BadParams { .. })));
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().shapes[0].text, "Original");
+    assert!(s.doc().unwrap().wb.active().unwrap().shapes.is_empty());
+}
+
+#[test]
+fn shape_text_respects_sheet_protection() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    assert!(s.execute("shape.setText", json!({"id": id, "text": "Changed"})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("shape.setText", json!({"id": id, "text": "Changed"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text, "Changed");
+}
+
+#[test]
+fn shape_text_is_capped_like_a_cell() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();
+    // The cap counts characters, not bytes.
+    let longest = "é".repeat(32_767);
+    s.execute("shape.setText", json!({"id": id, "text": longest})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text.chars().count(), 32_767);
+    let undo_len = s.doc().unwrap().undo.len();
+    let too_long = "x".repeat(32_768);
+    assert!(matches!(s.execute("shape.setText", json!({"id": id, "text": too_long})), Err(crate::EngineError::TextBoxTooLong(32_767))));
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text.chars().count(), 32_767);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+}
+
+#[test]
+fn shape_text_edit_survives_xlsx_roundtrip() {
+    let mut s = s();
+    s.execute("insert.textBox", json!({"text": "Imported"})).unwrap();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "text-box.xlsx", "base64": saved["base64"]})).unwrap();
+    let id = s.doc().unwrap().wb.active().unwrap().shapes[0].id;
+    let text = "Edited & <escaped>\n\nLast line\n";
+    s.execute("shape.setText", json!({"id": id, "text": text})).unwrap();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "edited.xlsx", "base64": saved["base64"]})).unwrap();
+    let shape = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(shape.kind, gridcraft_model::ShapeKind::TextBox);
+    assert_eq!(shape.text, text);
+}
+
+#[test]
 fn no_border_clears_only_shared_edges_and_undo_restores_them() {
     use gridcraft_core::RangeRef;
     use gridcraft_model::{BorderLine, Borders};
@@ -200,6 +304,103 @@ fn copy_paste_shifts_formulas() {
     assert_eq!(v(&s, "E5"), Value::Number(1.0));
     let f = s.execute("cell.get", json!({"cell": "C1"})).unwrap();
     assert_eq!(f["formula"], "=E5+B1");
+}
+
+#[test]
+fn rich_clipboard_copies_selected_displayed_cells_and_styles() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "outside selection"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B2", "values": [[0.125, "<tag>&\"\nnext"], [0.25, "last"]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B3", "code": "0.0%"})).unwrap();
+    s.execute("home.bold", json!({"range": "B2", "on": true})).unwrap();
+    s.execute("home.italic", json!({"range": "B2", "on": true})).unwrap();
+    s.execute("home.fontColor", json!({"range": "B2", "color": "#123456"})).unwrap();
+    s.execute("home.fillColor", json!({"range": "B2", "color": "#FEDCBA"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "B2:C3", "html": true})).unwrap();
+    let html = copied["html"].as_str().expect("copy publishes HTML as well as plain text");
+    assert_eq!(copied["text"], "12.5%\t\"<tag>&\"\"\nnext\"\n25.0%\tlast\n");
+    assert!(html.starts_with("<table "));
+    assert!(html.ends_with("</table>"));
+    assert_eq!(html.matches("<tr>").count(), 2);
+    assert_eq!(html.matches("<td ").count(), 4);
+    assert!(html.contains("&lt;tag&gt;&amp;&quot;<br>next"));
+    for content in ["12.5%", "25.0%", "font-weight:bold;", "font-style:italic;", "color:#123456;", "background:#FEDCBA;", "text-align:right;"] {
+        assert!(html.contains(content), "missing {content}");
+    }
+    assert!(!html.contains("outside selection"));
+    assert!(!html.contains("<html"));
+
+    let cut = s.execute("edit.cut", json!({"range": "B2:C3", "html": true})).unwrap();
+    assert_eq!(cut["html"], copied["html"]);
+    assert_eq!(cut["text"], copied["text"]);
+    s.execute("edit.paste", json!({"at": "E5", "text": cut["text"]})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(0.125));
+    assert_eq!(v(&s, "B2"), Value::Empty);
+}
+
+#[test]
+fn copy_and_cut_return_html_only_when_requested() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    for cmd in ["edit.copy", "edit.cut"] {
+        for params in [json!({"range": "A1"}), json!({"range": "A1", "html": false})] {
+            let r = s.execute(cmd, params).unwrap();
+            assert_eq!(r["text"], "x\n");
+            assert!(r.get("html").is_none(), "{cmd} must not bloat programmatic responses with HTML");
+        }
+        let r = s.execute(cmd, json!({"range": "A1", "html": true})).unwrap();
+        assert!(r["html"].as_str().is_some_and(|h| h.contains(">x</td>")));
+    }
+}
+
+#[test]
+fn rich_clipboard_clips_merges_and_skips_hidden_rows() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B2", "input": "merged"})).unwrap();
+    s.execute("home.mergeCenter", json!({"range": "B2:D5"})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E4", "input": "side"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "B2:C4", "html": true})).unwrap();
+    let html = copied["html"].as_str().expect("merged copy publishes HTML");
+    assert_eq!(copied["text"], "merged\t\n\t\n");
+    assert_eq!(html.matches("<tr>").count(), 2);
+    assert_eq!(html.matches("<td ").count(), 1);
+    assert!(html.contains("rowspan=\"2\" colspan=\"2\""));
+    assert!(html.contains(">merged</td>"));
+
+    // A selection beginning inside a merge must keep its shape without copying
+    // the original anchor's value from outside the selected rectangle.
+    let copied = s.execute("edit.copy", json!({"range": "C3:E5", "html": true})).unwrap();
+    let html = copied["html"].as_str().expect("partially selected merge publishes HTML");
+    assert_eq!(html.matches("<tr>").count(), 2);
+    assert_eq!(html.matches("<td ").count(), 3);
+    assert!(html.contains("rowspan=\"2\" colspan=\"2\""));
+    assert!(!html.contains("merged"));
+    assert!(html.contains(">side</td>"));
+}
+
+#[test]
+fn rich_clipboard_omits_html_for_large_ranges_without_truncating_text() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A10001", "input": "last cell"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1:A10001", "html": true})).unwrap();
+    assert!(copied.get("html").is_none(), "oversized HTML must be omitted, not partially copied");
+    let text = copied["text"].as_str().unwrap();
+    assert_eq!(text.lines().count(), 10_001);
+    assert!(text.ends_with("last cell\n"));
+    let copied = s.execute("edit.copy", json!({"range": "A10001", "html": true})).unwrap();
+    assert!(copied["html"].as_str().is_some_and(|html| html.contains("last cell")));
+}
+
+#[test]
+fn rich_clipboard_omits_html_when_escaping_exceeds_byte_budget() {
+    let mut s = s();
+    let text = "&".repeat(1_000_000);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1", "html": true})).unwrap();
+    assert!(copied.get("html").is_none(), "an oversized escaped value must not produce partial HTML");
+    assert_eq!(copied["text"].as_str().unwrap().len(), 1_000_001);
+    assert!(copied["text"].as_str().unwrap().ends_with("&\n"));
 }
 
 #[test]
@@ -574,12 +775,148 @@ fn xlsx_roundtrip_through_engine() {
     assert_eq!(v(&s, "B3"), Value::Number(3.0));
 }
 
+fn ods_fixture() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [
+        ("mimetype", "application/vnd.oasis.opendocument.spreadsheet"),
+        (
+            "META-INF/manifest.xml",
+            r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>"#,
+        ),
+        (
+            "content.xml",
+            r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" office:version="1.3"><office:body><office:spreadsheet><table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="42" table:formula="of:=SUM([.B1:.B2])"/><table:table-cell office:value-type="string"><text:p>Original data</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
+        ),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(data.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn ods_import_keeps_cached_values_and_reports_limits() {
+    let bytes = ods_fixture();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods);
+    for name in ["source.ods", "source.xlsx"] {
+        let mut s = s();
+        let r = s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(&bytes)})).unwrap();
+        assert!(!r["warnings"].as_array().unwrap().is_empty());
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Message(_))));
+        assert!(s.doc().unwrap().path.is_none());
+        assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+        assert_eq!(v(&s, "B1"), Value::from("Original data"));
+        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+        let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn ods_import_never_reuses_source_as_save_target() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-ods-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let bytes = ods_fixture();
+    for name in ["source.ods", "disguised.xlsx"] {
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut s = s();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        s.take_ui_requests();
+        s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Dialog(name, _) if name == "saveAs")));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(s.execute("file.saveAs", json!({"path": dir.join("source.ods")})).is_err());
+        assert!(s.execute("file.saveBytes", json!({"format": "ods"})).is_err());
+        let output = dir.join("converted.xlsx");
+        s.execute("file.saveAs", json!({"path": output})).unwrap();
+        assert!(!s.doc().unwrap().is_dirty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        s.execute("file.open", json!({"name": "converted.xlsx", "base64": crate::io::base64_encode(&std::fs::read(output).unwrap())})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(43.0));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn samples_build() {
     for (name, _) in crate::sample::SAMPLES {
         let wb = crate::sample::build(name).unwrap_or_else(|| panic!("sample {name}"));
         assert!(!wb.sheets[0].cells.is_empty());
     }
+}
+
+/// Original minimal BIFF12 records, built in source rather than a vendor workbook fixture.
+fn xlsb_fixture() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    fn wide(s: &str) -> Vec<u8> {
+        let units: Vec<_> = s.encode_utf16().collect();
+        (units.len() as u32).to_le_bytes().into_iter().chain(units.into_iter().flat_map(u16::to_le_bytes)).collect()
+    }
+    fn record(out: &mut Vec<u8>, id: u16, payload: &[u8]) {
+        if id < 128 {
+            out.push(id as u8);
+        } else {
+            out.extend([(id as u8 & 127) | 128, (id >> 7) as u8]);
+        }
+        let mut size = payload.len();
+        while size >= 128 {
+            out.push((size as u8 & 127) | 128);
+            size >>= 7;
+        }
+        out.push(size as u8);
+        out.extend(payload);
+    }
+    let mut book = vec![];
+    record(&mut book, 131, &[]); // BeginBook
+    record(&mut book, 143, &[]); // BeginBundleShs
+    let mut bundle = vec![0; 4]; // Visible
+    bundle.extend(1u32.to_le_bytes());
+    bundle.extend(wide("rId1"));
+    bundle.extend(wide("Imported"));
+    record(&mut book, 156, &bundle);
+    record(&mut book, 144, &[]);
+    record(&mut book, 132, &[]);
+    let mut sheet = vec![];
+    record(&mut sheet, 129, &[]); // BeginSheet
+    record(&mut sheet, 145, &[]); // BeginSheetData
+    record(&mut sheet, 0, &[0; 17]); // Row 0, no spans
+    let mut numeric = vec![0; 8]; // A1, default style
+    numeric.extend(42.0f64.to_le_bytes());
+    numeric.extend([0; 2]); // Formula flags
+    numeric.extend(3u32.to_le_bytes());
+    numeric.extend([0x1e, 42, 0]); // PtgInt(42)
+    numeric.extend(0u32.to_le_bytes());
+    record(&mut sheet, 9, &numeric); // FmlaNum
+    let mut text = 1u32.to_le_bytes().to_vec(); // B1
+    text.extend(0u32.to_le_bytes());
+    text.extend(wide("Original data"));
+    record(&mut sheet, 6, &text);
+    record(&mut sheet, 146, &[]);
+    record(&mut sheet, 130, &[]);
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/xl/worksheets/sheet1.bin" ContentType="application/vnd.ms-excel.worksheet"/></Types>"#;
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.bin"/></Relationships>"#;
+    let book_rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.bin"/></Relationships>"#;
+    for (name, data) in [
+        ("[Content_Types].xml", types.as_slice()),
+        ("_rels/.rels", rels.as_slice()),
+        ("xl/_rels/workbook.bin.rels", book_rels.as_slice()),
+        ("xl/workbook.bin", book.as_slice()),
+        ("xl/worksheets/sheet1.bin", sheet.as_slice()),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
 }
 
 #[test]
@@ -601,6 +938,63 @@ fn parity_counts() {
     let (done, total) = crate::catalog::parity();
     assert!(total > 250);
     assert!(done > 150, "parity {done}/{total}");
+}
+
+#[test]
+fn switch_row_column_on_a_chart_read_from_a_file() {
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["", "North", "South", "East", "West"], ["Mon", 10, 14, 9, 12], ["Tue", 12, 15, 11, 14], ["Wed", 14, 16, 10, 11], ["Thu", 11, 13, 8, 9], ["Fri", 9, 12, 7, 11], ["Sat", 11, 15, 10, 14]]}),
+    )
+    .unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:E7"})).unwrap();
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let b64 = r["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+    let chart = |s: &Session| s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!((chart(&s).source, chart(&s).series.len()), (None, 4));
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    let c = chart(&s);
+    assert!(c.by_rows);
+    assert_eq!(c.source.as_deref(), Some("Sheet1!A1:E7"));
+    assert_eq!(c.series.len(), 6);
+    assert_eq!(c.series[0].name.as_deref(), Some("Sheet1!$A$2"));
+    assert_eq!(c.series[0].categories.as_deref(), Some("Sheet1!$B$1:$E$1"));
+    assert_eq!(c.series[0].values, "Sheet1!$B$2:$E$2");
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    assert_eq!(chart(&s).series.len(), 4);
+}
+
+#[test]
+fn switch_row_column_with_whole_column_refs_is_bounded() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "North", "South"], ["Mon", 10, 14], ["Tue", 12, 15], ["Wed", 14, 16]]}))
+        .unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:C4"})).unwrap();
+    // As read from a file: no source block, series over whole columns.
+    let whole = |s: &mut Session| {
+        let c = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0];
+        c.source = None;
+        c.by_rows = false;
+        c.series.truncate(2);
+        for (i, col) in ["B", "C"].iter().enumerate() {
+            c.series[i].name = None;
+            c.series[i].categories = Some("Sheet1!$A:$A".into());
+            c.series[i].values = format!("Sheet1!${col}:${col}");
+        }
+    };
+    whole(&mut s);
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert!(c.by_rows);
+    // Clipped to the used rows, not a million series.
+    assert_eq!(c.series.len(), 3);
+    // A used range that is itself enormous is refused rather than charted.
+    s.execute("cell.set", json!({"cell": "C1048576", "input": "1"})).unwrap();
+    whole(&mut s);
+    assert!(s.execute("chart.switchRowColumn", json!({})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].series.len(), 2);
 }
 
 #[test]
@@ -712,6 +1106,14 @@ fn error_codes_are_stable() {
     assert_eq!(E::Disabled("x".into(), "r".into()).args(), vec![("command", "x".to_string()), ("reason", "r".to_string())]);
     assert_eq!(E::BadParams { cmd: "x".into(), msg: "m".into() }.args(), vec![("command", "x".to_string()), ("message", "m".to_string())]);
     assert_eq!(E::Other("m".into()).to_string(), "m");
+    assert_eq!(E::EncryptedWorkbook("x".into()).code(), "encrypted-workbook");
+    assert_eq!(E::LegacyWorkbook("x".into()).code(), "legacy-workbook");
+    assert_eq!(E::ImportFailed { name: "x".into(), message: "m".into() }.code(), "import-failed");
+    assert_eq!(E::ImportOnlyFormat("ODS").code(), "import-only-format");
+    assert_eq!(E::TextBoxTooLong(32_767).code(), "text-box-too-long");
+    assert_eq!(E::ChartRangeTooLarge.code(), "chart-range-too-large");
+    assert_eq!(E::TextBoxTooLong(32_767).args(), vec![("limit", "32767".into())]);
+    assert!(E::ChartRangeTooLarge.args().is_empty());
 }
 
 #[test]
@@ -1311,4 +1713,249 @@ fn name_manager_spells_values_in_the_session_locale() {
     assert_eq!(find("Rate")["valueLocal"], json!("1,5"));
     assert_eq!(find("Rate")["scope"], json!("Workbook"));
     assert_eq!(find("Flag")["valueLocal"], json!("WAHR"));
+}
+
+#[test]
+fn xlsb_import_keeps_cached_values_and_reports_limits() {
+    let bytes = xlsb_fixture();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);
+    for name in ["source.xlsb", "source.xlsx"] {
+        let mut s = s();
+        let r = s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(&bytes)})).unwrap();
+        assert!(!r["warnings"].as_array().unwrap().is_empty());
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Message(_))));
+        assert!(s.doc().unwrap().path.is_none());
+        assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+        assert_eq!(v(&s, "B1"), Value::from("Original data"));
+        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+        s.execute("cell.set", json!({"cell": "B1", "input": "Changed"})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0)); // Imported formula caches are constants.
+        let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn xlsb_import_never_reuses_source_as_save_target() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-xlsb-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let bytes = xlsb_fixture();
+    for name in ["source.xlsb", "disguised.xlsx"] {
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut s = s();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        s.take_ui_requests();
+        s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Dialog(name, _) if name == "saveAs")));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(s.execute("file.saveAs", json!({"path": dir.join("source.xlsb")})).is_err());
+        assert!(s.execute("file.saveBytes", json!({"format": "xlsb"})).is_err());
+        let output = dir.join("converted.xlsx");
+        s.execute("file.saveAs", json!({"path": output})).unwrap();
+        assert!(!s.doc().unwrap().is_dirty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        s.execute("file.open", json!({"name": "converted.xlsx", "base64": crate::io::base64_encode(&std::fs::read(output).unwrap())})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(43.0));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn malformed_xlsb_keeps_the_current_workbook() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Keep me"})).unwrap();
+    assert!(s.execute("file.open", json!({"name": "bad.xlsb", "base64": crate::io::base64_encode(b"not a workbook")})).is_err());
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(v(&s, "A1"), Value::from("Keep me"));
+    assert!(s.doc().unwrap().is_dirty());
+}
+
+/// A 2×2 PNG, so objects can be injected into a workbook in tests.
+fn tiny_png() -> Vec<u8> {
+    let img = image::RgbaImage::from_raw(2, 2, vec![255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 0, 0, 0, 0]).unwrap();
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> u32 {
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
+        id,
+        anchor: gridcraft_model::Anchor { cell: CellRef::parse(cell).unwrap(), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode },
+        data: tiny_png(),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    id
+}
+
+fn image_cell(s: &Session, id: u32) -> Option<CellRef> {
+    s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).map(|i| i.anchor.cell)
+}
+
+/// Issue #5: images anchored in cells follow their row when the sheet is sorted.
+#[test]
+fn sort_moves_anchored_images_with_their_rows() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]})).unwrap();
+    // One picture per data row, in its own row.
+    let ib = add_image(&mut s, "A2", AnchorMode::MoveAndSize);
+    let ic = add_image(&mut s, "A3", AnchorMode::MoveAndSize);
+    let ia = add_image(&mut s, "A4", AnchorMode::MoveAndSize);
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "A"})).unwrap();
+    // Ascending by name: b, c, a → a, b, c. Each picture lands in its row's new home.
+    assert_eq!(image_cell(&s, ib), Some(CellRef::parse("A3").unwrap()));
+    assert_eq!(image_cell(&s, ic), Some(CellRef::parse("A4").unwrap()));
+    assert_eq!(image_cell(&s, ia), Some(CellRef::parse("A2").unwrap()));
+}
+
+/// An `absolute`-pinned object stays exactly where it was drawn across a sort and a row delete.
+#[test]
+fn absolute_objects_ignore_sort_and_structural_edits() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]})).unwrap();
+    let pinned = add_image(&mut s, "A3", AnchorMode::Absolute);
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "A"})).unwrap();
+    assert_eq!(image_cell(&s, pinned), Some(CellRef::parse("A3").unwrap()));
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(image_cell(&s, pinned), Some(CellRef::parse("A3").unwrap()));
+}
+
+/// A "move but don't size" object follows its row across a sort but keeps its size.
+#[test]
+fn move_only_objects_follow_but_do_not_resize() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "N"], ["b", 2], ["a", 1]]})).unwrap();
+    let id = add_image(&mut s, "A2", AnchorMode::MoveOnly);
+    s.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A"})).unwrap();
+    // "a" moved to row 2 and "b" to row 3, so the image follows from A2 to A3.
+    assert_eq!(image_cell(&s, id), Some(CellRef::parse("A3").unwrap()));
+    let a = s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).unwrap().anchor;
+    assert_eq!((a.width, a.height), (40.0, 40.0));
+}
+
+/// `object.setAnchorMode` changes how an object follows its cells.
+#[test]
+fn set_anchor_mode_changes_following() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "N"], ["b", 2], ["a", 1]]})).unwrap();
+    let id = add_image(&mut s, "A2", AnchorMode::MoveAndSize);
+    let r = s.execute("object.setAnchorMode", json!({"kind": "image", "id": id, "mode": "dontMoveOrSizeWithCells"})).unwrap();
+    assert_eq!(r["mode"], "absolute");
+    s.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A"})).unwrap();
+    // Pinned absolute: it stays put even though its row moved.
+    assert_eq!(image_cell(&s, id), Some(CellRef::parse("A2").unwrap()));
+    // A bad mode is rejected, not silently ignored.
+    assert!(s.execute("object.setAnchorMode", json!({"kind": "image", "id": id, "mode": "sideways"})).is_err());
+}
+
+/// A sort moves only objects anchored inside the sorted block on both axes: a picture beside
+/// the block (same rows, other columns) stays where it is.
+#[test]
+fn sort_leaves_objects_outside_the_block_alone() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]})).unwrap();
+    let beside = add_image(&mut s, "Z3", AnchorMode::MoveAndSize);
+    let inside = add_image(&mut s, "B3", AnchorMode::MoveAndSize);
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "A"})).unwrap();
+    assert_eq!(image_cell(&s, beside), Some(CellRef::parse("Z3").unwrap()));
+    // "c" moved from row 3 to row 4, taking the picture in B3 with it.
+    assert_eq!(image_cell(&s, inside), Some(CellRef::parse("B4").unwrap()));
+}
+
+/// Inserted pictures default to Excel's "Move but don't size with cells".
+#[test]
+fn inserted_pictures_move_but_do_not_size() {
+    let mut s = s();
+    let b64 = crate::io::base64_encode(&tiny_png());
+    let id = s.execute("insert.picture", json!({"base64": b64, "at": "C3"})).unwrap()["image"].as_u64().unwrap() as u32;
+    let mode = |s: &Session| s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).unwrap().anchor.mode;
+    assert_eq!(mode(&s), gridcraft_model::AnchorMode::MoveOnly);
+    let b64 = crate::io::base64_encode(&tiny_png());
+    let id2 = s.execute("insert.picture", json!({"base64": b64, "mode": "absolute"})).unwrap()["image"].as_u64().unwrap() as u32;
+    let m2 = s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id2).unwrap().anchor.mode;
+    assert_eq!(m2, gridcraft_model::AnchorMode::Absolute);
+}
+
+/// `object.setAnchorMode` needs a real object kind.
+#[test]
+fn set_anchor_mode_rejects_unknown_kind() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    let id = add_image(&mut s, "A2", AnchorMode::MoveAndSize);
+    for kind in [json!(""), json!("widget"), serde_json::Value::Null] {
+        assert!(s.execute("object.setAnchorMode", json!({"kind": kind, "id": id, "mode": "absolute"})).is_err());
+    }
+    let mode = |s: &Session| s.doc().unwrap().wb.active().unwrap().images[0].anchor.mode;
+    assert_eq!(mode(&s), AnchorMode::MoveAndSize);
+    s.execute("object.setAnchorMode", json!({"kind": "image", "id": id, "mode": "moveOnly"})).unwrap();
+    assert_eq!(mode(&s), AnchorMode::MoveOnly);
+}
+
+#[test]
+fn html_copy_and_export_follow_display_locale() {
+    let mut s = session_in(prefs("pt-BR", "pt-BR"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SUM(1.5,2)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "TRUE"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"html": true})).unwrap();
+    assert!(copied["text"].as_str().unwrap().contains("3,5\tVERDADEIRO"));
+    let html = copied["html"].as_str().unwrap();
+    assert!(html.contains("3,5") && html.contains("VERDADEIRO"));
+    let d = s.doc().unwrap();
+    let html = String::from_utf8(crate::io::save_bytes(&d.wb, "book.html").unwrap()).unwrap();
+    assert!(html.contains("3,5") && html.contains("VERDADEIRO"));
+    let stored = d.wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap();
+    assert_eq!(stored.formula.as_ref().unwrap().text, "SUM(1.5,2)");
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    let copied = s.execute("edit.copy", json!({"html": true})).unwrap();
+    assert!(copied["text"].as_str().unwrap().contains("=SOMA(1,5;2)"));
+    assert!(copied["html"].as_str().unwrap().contains("=SOMA(1,5;2)"));
+}
+
+#[test]
+fn imported_cached_data_stays_canonical_under_local_display() {
+    let mut s = session_in(prefs("pt-BR", "pt-BR"));
+    let bytes = xlsb_fixture();
+    s.execute("file.open", json!({"name": "source.xlsb", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.locale.ui.tag, "pt-BR");
+    assert!(d.wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+    assert!(matches!(crate::io::save_bytes(&d.wb, "book.xlsb"), Err(crate::EngineError::ImportOnlyFormat("XLSB"))));
+    assert!(matches!(crate::io::save_bytes(&d.wb, "book.ods"), Err(crate::EngineError::ImportOnlyFormat("ODS"))));
+}
+
+#[test]
+fn chart_display_labels_follow_locale_without_changing_series_formulas() {
+    let mut s = session_in(prefs("pt-BR", "pt-BR"));
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Category", "Value"], [1.5, 2], [2.5, 3]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    let d = s.doc().unwrap();
+    let mut chart = d.wb.active().unwrap().charts[0].clone();
+    chart.series =
+        vec![gridcraft_model::Series { categories: Some("Planilha1!$A$2:$A$3".into()), values: "Planilha1!$B$2:$B$3".into(), ..Default::default() }];
+    let resolved = gridcraft_chart::resolve(&d.wb, 0, &chart);
+    assert_eq!(resolved.categories, vec!["1,5", "2,5"]);
+    assert_eq!(chart.series[0].values, "Planilha1!$B$2:$B$3");
 }

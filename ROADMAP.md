@@ -112,8 +112,8 @@ by open equivalents or left out, not cloned.
   signed/notarized macOS universal DMG, signed Windows x64/x86 MSI + zip, Linux AppImage/deb/rpm/
   tar.gz + Flatpak manifest, FreeBSD tarball and a web zip.
 - Languages: the interface, function names, error values, booleans, number-format codes and
-  separators in 11 languages: English (US), Portuguese (Brazil, Portugal), Spanish, French, German,
-  Italian, Japanese, Korean and Chinese (Simplified, Traditional). As in Excel, function names
+  separators in 12 languages: English (US), Portuguese (Brazil, Portugal), Spanish, French, German,
+  Italian, Russian, Japanese, Korean and Chinese (Simplified, Traditional). As in Excel, function names
   follow the formula language and separators follow the regional format (`=SOMA(1,5;2)`,
   `{1\2;3\4}` in pt-BR), while files and the journal stay canonical (English names), so a workbook
   opens the same in every language. Keyboard shortcuts follow Excel where it localises them (pt-BR
@@ -138,7 +138,7 @@ by open equivalents or left out, not cloned.
 | M9 | Page layout & print | 🟡 most; true Page Layout view remains |
 | M10 | PivotTables, Solver, Analysis ToolPak | 🟡 PivotTables in; slicers, Solver, ToolPak remain |
 | M11 | Automation (record actions, scripts) | ✅ done |
-| M12 | Performance, accessibility, i18n | 🟡 partial; i18n in (11 languages), performance and accessibility remain |
+| M12 | Performance, accessibility, i18n | 🟡 partial; i18n in (12 languages), performance and accessibility remain |
 | M13 | Release & polish | 🟡 tooling ready; needs release secrets |
 
 ## How to measure

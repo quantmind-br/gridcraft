@@ -59,6 +59,18 @@ pub enum EngineError {
     /// sheet.
     #[error("The cell or chart you're trying to change is on a protected sheet.")]
     Protected,
+    #[error("'{0}' is password-protected. GridCraft can't open encrypted workbooks yet; remove the password in Excel and try again.")]
+    EncryptedWorkbook(String),
+    #[error("'{0}' is an Excel 97-2003 (.xls) workbook or another legacy binary file. Save it as .xlsx in Excel and try again.")]
+    LegacyWorkbook(String),
+    #[error("We can't import '{name}': {message}")]
+    ImportFailed { name: String, message: String },
+    #[error("{0} is supported for data import only. Save as .xlsx or another supported export format.")]
+    ImportOnlyFormat(&'static str),
+    #[error("Text boxes can hold at most {0} characters.")]
+    TextBoxTooLong(usize),
+    #[error("The source range is too large for a chart.")]
+    ChartRangeTooLarge,
 }
 
 impl EngineError {
@@ -75,6 +87,12 @@ impl EngineError {
             EngineError::InvalidFormula(_) => "invalid-formula",
             EngineError::InvalidLocale(_) => "invalid-locale",
             EngineError::Protected => "protected-sheet",
+            EngineError::EncryptedWorkbook(_) => "encrypted-workbook",
+            EngineError::LegacyWorkbook(_) => "legacy-workbook",
+            EngineError::ImportFailed { .. } => "import-failed",
+            EngineError::ImportOnlyFormat(_) => "import-only-format",
+            EngineError::TextBoxTooLong(_) => "text-box-too-long",
+            EngineError::ChartRangeTooLarge => "chart-range-too-large",
         }
     }
 
@@ -84,9 +102,13 @@ impl EngineError {
             EngineError::UnknownCommand(c) => vec![("command", c.clone())],
             EngineError::Disabled(c, why) => vec![("command", c.clone()), ("reason", why.clone())],
             EngineError::BadParams { cmd, msg } => vec![("command", cmd.clone()), ("message", msg.clone())],
-            EngineError::NoDocument | EngineError::Protected => vec![],
+            EngineError::NoDocument | EngineError::Protected | EngineError::ChartRangeTooLarge => vec![],
             EngineError::Other(m) | EngineError::InvalidFormula(m) | EngineError::InvalidLocale(m) => vec![("message", m.clone())],
             EngineError::Internal(c, m) => vec![("command", c.clone()), ("message", m.clone())],
+            EngineError::EncryptedWorkbook(name) | EngineError::LegacyWorkbook(name) => vec![("name", name.clone())],
+            EngineError::ImportFailed { name, message } => vec![("name", name.clone()), ("message", message.clone())],
+            EngineError::ImportOnlyFormat(format) => vec![("format", (*format).into())],
+            EngineError::TextBoxTooLong(limit) => vec![("limit", limit.to_string())],
         }
     }
 }

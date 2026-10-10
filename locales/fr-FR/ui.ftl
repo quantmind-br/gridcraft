@@ -1078,3 +1078,11 @@ ui-border-presets = Bordures prédéfinies
 ui-border-preview = Aperçu de la bordure
 ui-preview = Aperçu
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = Faites glisser pour remplir des cellules. Faites glisser depuis l’intérieur d’une cellule pour sélectionner une plage.
+
+ui-interface-language = Langue de l’interface
+ui-ribbon-page-layout-orientation = Orientation
+ui-ribbon-sheet-options-view = Afficher
+ui-language-command-set = Langue de l’interface
+ui-language-command-english = Langue de l’interface : anglais
+ui-language-command-japanese = Langue de l’interface : japonais
+ui-the-text-box-s-worksheet-is-no-longer-active = La feuille contenant la zone de texte n’est plus active.

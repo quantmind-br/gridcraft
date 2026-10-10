@@ -91,8 +91,9 @@ kept in `localStorage` with the other preferences.
 
 No CJK font is part of the bundle. When the interface language is Japanese, Korean or Chinese,
 or a cell holds CJK text, the app fetches one font file from `./fonts/` next to `index.html`:
-`cjk-ja.ttf`, `cjk-ko.ttf`, `cjk-zh-CN.ttf` or `cjk-zh-TW.ttf`. Add the files you want to support
-(any font with the matching glyph shapes, for example a subset of an open-licensed Noto Sans CJK
-build) to the site and serve them with the same cache rules as the other assets. When a file is
-missing the app logs a warning in the browser console and shows CJK characters as boxes; every
-other language works without extra files.
+`cjk-ja.ttf`, `cjk-ko.ttf`, `cjk-zh-CN.ttf` or `cjk-zh-TW.ttf`, matching the interface language;
+in any other interface language, CJK text in cells uses `cjk-zh-CN.ttf`. Add the files you want
+to support (any font with the matching glyph shapes, for example a subset of an open-licensed Noto
+Sans CJK build) to the site and serve them with the same cache rules as the other assets. When a
+file is missing the app logs a warning in the browser console and shows CJK characters as boxes;
+every other language works without extra files.

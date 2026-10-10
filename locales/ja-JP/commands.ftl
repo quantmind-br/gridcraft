@@ -318,3 +318,5 @@ cmd-app-setLocale-label = 言語と地域の設定
 cmd-app-getInternational-label = 国際設定
 cmd-app-languages-label = 利用可能な言語
 cmd-app-options-label = オプション…
+cmd-shape-setText-label = テキストボックスの編集
+cmd-object-setAnchorMode-label = オブジェクトの固定方法

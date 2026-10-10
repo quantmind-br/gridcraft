@@ -1078,3 +1078,11 @@ ui-border-presets = 罫線のプリセット
 ui-border-preview = 罫線のプレビュー
 ui-preview = プレビュー
 ui-drag-to-fill-cells-drag-from-inside-a-cell-to-select-a-range = ドラッグしてセルにデータを自動入力します。セルの内側からドラッグすると範囲を選択できます。
+
+ui-interface-language = 表示言語
+ui-ribbon-page-layout-orientation = 印刷の向き
+ui-ribbon-sheet-options-view = 画面
+ui-language-command-set = 表示言語
+ui-language-command-english = 表示言語: 英語
+ui-language-command-japanese = 表示言語: 日本語
+ui-the-text-box-s-worksheet-is-no-longer-active = テキスト ボックスのワークシートはアクティブではなくなりました。
