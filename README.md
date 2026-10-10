@@ -196,12 +196,13 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 
 ## Roadmap
 
-GridCraft is pre-alpha and moving fast. It covers 89% of Excel's ribbon and menu commands
-([`docs/parity.md`](docs/parity.md)) and about 93% of its worksheet functions; weighted by depth,
-we estimate about 65% of what Excel power users rely on. We're roughly 80% of the way to a first
-alpha. Next up: signed release builds, XLSX fidelity on real-world files, performance on very large
-sheets, then slicers, Solver, chart trendlines and a true Page Layout view. The plan and estimates
-are in [ROADMAP.md](ROADMAP.md).
+GridCraft is in **alpha**: the core workflow works end to end, but depth, fidelity and file
+compatibility are still rough. It covers 89% of the Excel ribbon commands in our catalog
+([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 501 of Excel's 523 worksheet functions
+([`docs/function-parity.md`](docs/function-parity.md)); weighted by what Excel users rely on, we
+estimate it is about 50% ready for real work. Next up: XLSX fidelity on real-world files, very large
+workbooks and multi-threaded recalc, chart depth, text in every script, and `.xls` import. Stage,
+numbers and estimates are in [ROADMAP.md](ROADMAP.md); the ranked work list is [`docs/gaps.md`](docs/gaps.md).
 
 ## Downloads
 
@@ -215,7 +216,8 @@ are in [ROADMAP.md](ROADMAP.md).
 | arm64 (Snapdragon and other ARM PCs) | `gridcraft-<ver>-windows-arm64.msi` | `gridcraft-<ver>-windows-arm64-portable.zip` |
 | x86 (32-bit) | `gridcraft-<ver>-windows-x86.msi` | `gridcraft-<ver>-windows-x86-portable.zip` |
 
-Installers and executables are code-signed.
+Installers and executables are code-signed. The MSI installer offers an optional desktop shortcut
+(unchecked on a new installation).
 
 **If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
 Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
