@@ -669,9 +669,8 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(c)).cloned();
             let loc = *cx.wb.locale;
-            let cell = super::edit::input_to_cell(&t, old.as_ref(), &mut cx.wb, &loc).unwrap_or(None);
+            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb, &loc).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.cells.set(c, x),
@@ -691,9 +690,15 @@ fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: char) 
     let mut cur = String::new();
     let mut in_q = false;
     let mut last_delim = false;
-    for c in text.chars() {
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
         if c == quote {
-            in_q = !in_q;
+            if in_q && chars.peek() == Some(&quote) {
+                cur.push(quote);
+                chars.next();
+            } else {
+                in_q = !in_q;
+            }
             continue;
         }
         if !in_q && delims.contains(&c) {

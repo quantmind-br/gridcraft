@@ -9,3 +9,4 @@ error-internal = Internal error in “{ $command }” (the workbook was kept as 
 error-other = { $message }
 error-invalid-formula = There is a problem with this formula: { $message }
 error-invalid-locale = The language or regional settings are not valid: { $message }
+error-protected-sheet = This change is not allowed: the cell or chart is on a protected sheet.

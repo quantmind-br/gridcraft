@@ -9,3 +9,4 @@ error-internal = “{ $command }”发生内部错误（工作簿保持原样）
 error-other = { $message }
 error-invalid-formula = 此公式存在问题：{ $message }
 error-invalid-locale = 语言或区域设置无效：{ $message }
+error-protected-sheet = 不允许此更改：该单元格或图表位于受保护的工作表中。

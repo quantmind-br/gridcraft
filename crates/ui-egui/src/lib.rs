@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod border_preview;
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -39,7 +40,9 @@ pub use control::{ControlRequest, ControlResponse};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
+    /// The manual preference, retained when following the system appearance.
     pub dark: bool,
+    pub system_theme: bool,
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
     pub formula_bar: bool,
@@ -52,12 +55,35 @@ impl Default for UiState {
     fn default() -> Self {
         UiState {
             dark: false,
+            system_theme: false,
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             formula_bar: true,
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+        }
+    }
+}
+
+impl UiState {
+    pub fn theme_preference(&self) -> egui::ThemePreference {
+        if self.system_theme {
+            egui::ThemePreference::System
+        } else if self.dark {
+            egui::ThemePreference::Dark
+        } else {
+            egui::ThemePreference::Light
+        }
+    }
+
+    pub fn theme_mode(&self) -> &'static str {
+        if self.system_theme {
+            "system"
+        } else if self.dark {
+            "dark"
+        } else {
+            "light"
         }
     }
 }
@@ -128,6 +154,7 @@ pub struct SheetApp {
     font_downloads: Vec<(String, Arc<egui::FontData>)>,
     /// Font file already requested from the host.
     font_requested: Option<&'static str>,
+    effective_dark: bool,
     pub name_box: Option<String>,
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
@@ -166,6 +193,7 @@ impl SheetApp {
             cjk_checked: None,
             font_downloads: Vec::new(),
             font_requested: None,
+            effective_dark: false,
             name_box: None,
             shots: control::Shots::default(),
             selected_chart: None,
@@ -289,8 +317,21 @@ impl SheetApp {
                 Ok(Json::Null)
             }
             "view.darkMode" => {
-                self.ui.dark = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.dark);
+                let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
+                self.ui.dark = p.get("on").and_then(Json::as_bool).unwrap_or(!current);
+                self.ui.system_theme = false;
                 Ok(json!({"on": self.ui.dark}))
+            }
+            "view.theme" => {
+                match p.get("mode").and_then(Json::as_str) {
+                    Some("system") => self.ui.system_theme = true,
+                    Some(mode @ ("light" | "dark")) => {
+                        self.ui.dark = mode == "dark";
+                        self.ui.system_theme = false;
+                    }
+                    _ => return Some(Err("theme mode must be system, light, or dark".into())),
+                }
+                Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.zoom100" => return Some(self.session.run("view.zoom", json!({"percent": 100})).inspect(|_| self.after_engine())),
             "ui.dialog" => {
@@ -454,7 +495,7 @@ impl SheetApp {
         let loc = self.session.locale();
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
-        let at = d.selection.active;
+        let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
         let current = sh.cell(at).map(|c| gridcraft_engine::locale::input_local(c, &loc)).unwrap_or_default();
         let (text, replace) = match text {
             Some(t) => (t, true),
@@ -549,9 +590,12 @@ impl SheetApp {
                 self.fonts_ready = true;
             }
         }
-        if ctx.global_style().visuals.dark_mode != self.ui.dark {
-            theme::apply(ctx, self.ui.dark);
+        let preference = self.ui.theme_preference();
+        if ctx.options(|o| o.theme_preference) != preference {
+            ctx.set_theme(preference);
+            ctx.request_repaint();
         }
+        self.effective_dark = ctx.theme() == egui::Theme::Dark;
         control::poll(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
@@ -677,6 +721,7 @@ pub fn clean_error(e: &str) -> String {
     e.to_string()
 }
 
+#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
     {

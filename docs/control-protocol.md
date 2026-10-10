@@ -39,6 +39,12 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
+Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
+to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.
+System follows live OS appearance changes and falls back to Light when the platform supplies no preference.
+The saved choice remains System; new users still start in Light. The legacy
+`view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
+
 ## Language and regional format
 
 The interface language, the formula language and the regional format are session preferences. Formulas, number
@@ -55,9 +61,14 @@ the current language types and sees it.
 Commands that take or return text a user types or sees:
 
 - `cell.set`, `range.fill`: `inputLocal` (typed text, e.g. `=SOMA(1,5;2)`, `1,5`, `10/10/2026`) instead of `input`; the
-  optional `locale` tag overrides the session language and region for that call.
+  optional `locale` tag overrides the session language and region for that call. `inputLocal` follows the same sheet
+  protection as `input`: a locked cell on a protected sheet is refused with the `protected-sheet` error code.
 - `cell.get`, `document.inspect`, and the commands that list names, conditional formats and validations: `formula` and
   `formulaLocal`, `numberFormat` and `numberFormatLocal`; the formula-taking commands accept the `…Local` params.
+- A formula that is formatted Hidden on a protected sheet is shown in neither spelling: `formula` and `formulaLocal`
+  are `null` in `cell.get`, `formulas.watchWindow` and `formulas.errorChecking`, `input` and `inputLocal` hold the
+  value instead, `sheet.read {formulas: true}` returns the value, `formulas.evaluateFormula {cell}` is refused, and
+  `edit.find` / `edit.replace` do not look inside it.
 - Number-format commands accept `numberFormatLocal` (`#.##0,00`, `dd/mm/aaaa`).
 - `formulas.functions`: each item has `name` (canonical) and `localName`.
 

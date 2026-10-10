@@ -315,6 +315,13 @@ fn write_node(s: &mut String, e: &Expr, r1c1: Option<CellRef>, d: &Dialect) {
                 write_expr(s, x, r1c1, d);
             }
             UnOp::Percent => write_expr(s, e, r1c1, d),
+            UnOp::Spill => {
+                write_expr(s, x, r1c1, d);
+                // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
+                if !matches!(**x, Expr::Error(_)) {
+                    s.push('#');
+                }
+            }
         },
         Expr::Binary(..) | Expr::Invoke(..) => write_expr(s, e, r1c1, d),
         Expr::Call(name, args) => {

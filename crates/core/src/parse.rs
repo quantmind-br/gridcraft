@@ -445,7 +445,7 @@ fn valid_ymd(sys: DateSystem, y: i64, m: i64, d: i64) -> Option<f64> {
     if !(1..=12).contains(&m) || d < 1 {
         return None;
     }
-    let max = if y == 1900 && m == 2 { 29 } else { crate::date::days_in_month(y as i32, m as u32) as i64 };
+    let max = crate::date::days_in_month_in(sys, y as i32, m as u32) as i64;
     if d > max {
         return None;
     }
@@ -454,6 +454,7 @@ fn valid_ymd(sys: DateSystem, y: i64, m: i64, d: i64) -> Option<f64> {
 
 /// The year used for dates typed without one. Fixed per process from the system clock when
 /// available (wasm without clock falls back to 2026).
+#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn current_year() -> i64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -668,5 +669,26 @@ mod tests {
         assert_eq!(parse_number_text("1,5"), None);
         // The date system is honoured by the localized path.
         assert_eq!(parse_number_text_in("1/1/1904", DateSystem::D1904, &INVARIANT.regional), Some(0.0));
+    }
+
+    #[test]
+    fn fictitious_1900_02_29() {
+        // Excel accepts 29 February 1900 (serial 60) and keeps 1 March 1900 at 61.
+        assert_eq!(p("2/29/1900").value, Value::Number(60.0));
+        assert_eq!(p("1900-02-29").value, Value::Number(60.0));
+        assert_eq!(p("29-Feb-1900").value, Value::Number(60.0));
+        assert_eq!(p("2/28/1900").value, Value::Number(59.0));
+        assert_eq!(p("3/1/1900").value, Value::Number(61.0));
+        assert_eq!(p("2/29/1901").value, Value::text("2/29/1901"));
+        assert_eq!(p("2/30/1900").value, Value::text("2/30/1900"));
+        // The 1904 system starts after it.
+        assert_eq!(parse_input("2/29/1900", DateSystem::D1904).value, Value::text("2/29/1900"));
+        assert_eq!(parse_input("2/29/1904", DateSystem::D1904).value, Value::Number(59.0));
+        // The regional paths agree: day/month/year in pt-BR, the 1904 system and the leap rule.
+        assert_eq!(pt("29/02/1900").value, Value::Number(60.0));
+        assert_eq!(pt("29 de fevereiro de 1900").value, Value::Number(60.0));
+        assert_eq!(pt("29/02/1901").value, Value::text("29/02/1901"));
+        assert_eq!(parse_number_text_in("2/29/1900", DateSystem::D1900, &INVARIANT.regional), Some(60.0));
+        assert_eq!(parse_number_text_in("2/29/1900", DateSystem::D1904, &INVARIANT.regional), None);
     }
 }

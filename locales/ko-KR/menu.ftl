@@ -22,7 +22,10 @@ menu-edit-delete = 삭제…
 ## View
 
 menu-view-formula-bar = 수식 입력줄
-menu-view-dark-mode = 어두운 모드
+menu-view-display-theme = 표시 테마
+menu-theme-system = 시스템
+menu-theme-light = 밝게
+menu-theme-dark = 어둡게
 menu-view-collapse-ribbon = 리본 메뉴 축소
 menu-view-zoom = 확대/축소…
 

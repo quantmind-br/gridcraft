@@ -22,7 +22,10 @@ menu-edit-delete = 删除…
 ## View
 
 menu-view-formula-bar = 编辑栏
-menu-view-dark-mode = 深色模式
+menu-view-display-theme = 显示主题
+menu-theme-system = 系统
+menu-theme-light = 浅色
+menu-theme-dark = 深色
 menu-view-collapse-ribbon = 折叠功能区
 menu-view-zoom = 缩放…
 

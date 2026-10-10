@@ -129,7 +129,7 @@ pub fn tree() -> Vec<Menu> {
                 cmd("view.freezeTopRow", None),
                 cmd("view.unfreezePanes", None),
                 SEP,
-                key("menu-view-dark-mode", "view.darkMode", None),
+                key("menu-view-display-theme", THEME_ACTION, None),
                 key("menu-view-collapse-ribbon", "view.collapseRibbon", Some("CMD+ALT+R")),
             ],
         ),
@@ -254,6 +254,12 @@ pub const ABOUT_KEY: &str = "menu-app-about";
 /// Action of the "About" item.
 pub const ABOUT_ACTION: &str = "dialog:about";
 
+/// Action of the "Display Theme" item, which holds a submenu with [`THEME_CHOICES`] instead of
+/// running a command itself.
+pub const THEME_ACTION: &str = "view.theme";
+/// The Display Theme choices: the `mode` of `view.theme` and the `menu.ftl` message that names it.
+pub const THEME_CHOICES: [(&str, &str); 3] = [("system", "menu-theme-system"), ("light", "menu-theme-light"), ("dark", "menu-theme-dark")];
+
 fn label_text(loc: &Localizer, label: Label) -> String {
     match label {
         Label::Command(id) => loc.command_label(id).map_or_else(|| id.to_string(), |t| t.into_owned()),
@@ -319,11 +325,14 @@ mod tests {
             }
         }
         assert!(en.get(ABOUT_KEY, &[]).is_some());
+        for (mode, k) in THEME_CHOICES {
+            assert!(en.get(k, &[]).is_some_and(|t| !t.is_empty()), "menu.ftl has no `{k}` for the {mode} theme");
+        }
     }
 
     /// Commands the UI shell itself runs (`SheetApp::run_ui_command`): view toggles that are not
     /// saved in the workbook.
-    const UI_COMMANDS: [&str; 3] = ["view.formulaBar", "view.collapseRibbon", "view.darkMode"];
+    const UI_COMMANDS: [&str; 3] = ["view.formulaBar", "view.collapseRibbon", THEME_ACTION];
 
     #[test]
     fn command_actions_are_engine_or_ui_commands() {

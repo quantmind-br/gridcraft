@@ -22,7 +22,10 @@ menu-edit-delete = 削除…
 ## View
 
 menu-view-formula-bar = 数式バー
-menu-view-dark-mode = ダーク モード
+menu-view-display-theme = 表示テーマ
+menu-theme-system = システム
+menu-theme-light = ライト
+menu-theme-dark = ダーク
 menu-view-collapse-ribbon = リボンを折りたたむ
 menu-view-zoom = ズーム…
 

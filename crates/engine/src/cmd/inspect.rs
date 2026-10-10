@@ -103,7 +103,10 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
         let mut cols = Vec::with_capacity(r.width() as usize);
         for col in r.start.col..=r.end.col {
             let c = CellRef::new(row, col);
-            let v = if formulas && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref()) {
+            let v = if formulas
+                && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
+                && !crate::display::formula_hidden(&d.wb, sh, c)
+            {
                 let canonical = format!("={}", f.text);
                 json!(if local { crate::locale::to_local_formula(&canonical, &d.wb.locale.dialect()) } else { canonical })
             } else if formatted {
@@ -126,7 +129,9 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
     let cell = sh.cell(c);
     let style = d.wb.styles.get(sh.style_id(c));
     let loc = &d.wb.locale;
-    let formula = cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text));
+    // A hidden formula on a protected sheet is not shown in any spelling.
+    let hidden = crate::display::formula_hidden(&d.wb, sh, c);
+    let formula = cell.and_then(|x| x.formula.as_ref()).filter(|_| !hidden).map(|f| format!("={}", f.text));
     Ok(json!({
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
@@ -136,8 +141,8 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "numberFormat": style.num_fmt.as_str(),
         "numberFormatLocal": crate::locale::to_local_format(style.num_fmt.as_str(), &loc.dialect()),
         "text": crate::display::cell_text(&d.wb, sh, c),
-        "input": cell.map(|x| x.input_text()).unwrap_or_default(),
-        "inputLocal": cell.map(|x| crate::locale::input_local(x, loc)).unwrap_or_default(),
+        "input": cell.map(|x| if hidden { sh.value(c).display() } else { x.input_text() }).unwrap_or_default(),
+        "inputLocal": cell.map(|x| if hidden { crate::locale::value_local(&sh.value(c), loc) } else { crate::locale::input_local(x, loc) }).unwrap_or_default(),
         "spilledFrom": sh.spill_ranges.iter().find(|(a, r)| **a != c && r.contains(c)).map(|(a, _)| a.a1()),
         "spill": sh.spill_ranges.get(&c).map(|r| r.a1()),
         "style": style,

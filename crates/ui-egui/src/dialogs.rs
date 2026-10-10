@@ -1263,12 +1263,17 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
                         (BorderStyle::Dotted, l.text("ui-dialogs-border-style-dotted", &[])),
                         (BorderStyle::Double, l.text("ui-dialogs-border-style-double", &[])),
                     ] {
-                        if ui.selectable_label(slot.style == s, &*label).clicked() {
+                        let response = ui.selectable_label(slot.style == s, &*label);
+                        response
+                            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, ui.is_enabled(), format!("{n} {label}")));
+                        if response.clicked() {
                             slot.style = s;
                         }
                     }
                 });
             }
+            let theme = app.session.active().map(|doc| &doc.wb.theme).cloned().unwrap_or_default();
+            crate::border_preview::sample(ui, l, &st.borders, &theme);
         }
         "Fill" => {
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
@@ -1584,7 +1589,7 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let scope = n["scope"].as_str().unwrap_or("");
                 ui.label(if scope == "Workbook" { l.tr("Workbook").into_owned() } else { scope.to_string() });
                 if ui.small_button(&*l.tr("Delete")).clicked() {
-                    app.run_or_alert("formulas.deleteName", json!({"name": n["name"]}));
+                    app.run_or_alert("formulas.deleteName", json!({"name": n["name"], "scope": n["scope"]}));
                 }
             });
             ui.end_row();

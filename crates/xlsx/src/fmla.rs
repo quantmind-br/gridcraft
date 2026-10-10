@@ -30,6 +30,8 @@ fn expr_to_file(e: Expr) -> String {
     let e = prefix_params(e, &mut Vec::new());
     let e = e.map(&mut |x| match x {
         Expr::Call(name, args) => Expr::Call(gridcraft_formula::catalog::file_name(&name), args),
+        // Files have no `#` operator: Excel writes `A1#` as `_xlfn.ANCHORARRAY(A1)`.
+        Expr::Unary(UnOp::Spill, r) => Expr::Call("_xlfn.ANCHORARRAY".into(), vec![*r]),
         other => other,
     });
     gridcraft_formula::print(&e)
@@ -170,6 +172,13 @@ mod tests {
     }
 
     #[test]
+    fn spill_references() {
+        assert_eq!(to_file(&Formula::new("SUM(Sheet1!$D$1#)+B2#")), "SUM(_xlfn.ANCHORARRAY(Sheet1!$D$1))+_xlfn.ANCHORARRAY(B2)");
+        assert_eq!(text_to_file("=Sheet1!$D$1#"), "_xlfn.ANCHORARRAY(Sheet1!$D$1)");
+        assert_eq!(from_file("SUM(_xlfn.ANCHORARRAY(Sheet1!$D$1))+_xlfn.ANCHORARRAY(B2)"), "SUM(Sheet1!$D$1#)+B2#");
+    }
+
+    #[test]
     fn prefixes() {
         assert_eq!(to_file(&Formula::new("XLOOKUP(1,A:A,B:B)+SUM(A1)")), "_xlfn.XLOOKUP(1,A:A,B:B)+SUM(A1)");
         assert_eq!(to_file(&Formula::new("FILTER(A1:A3,B1:B3)")), "_xlfn._xlws.FILTER(A1:A3,B1:B3)");
@@ -203,6 +212,10 @@ mod tests {
         assert_eq!(local_to_file("{1\\2;3\\4}"), "{1,2;3,4}");
         assert_eq!(local_to_file("SUM(1;2)"), "_xludf.SUM(1,2)");
         assert_eq!(local_to_file("SOMA(1,5;2)"), "SUM(1.5,2)");
+        assert_eq!(
+            local_to_file("SOMA(A1#;CONT.VALORES(Tabela1[Col];B2#))"),
+            "SUM(_xlfn.ANCHORARRAY(A1),COUNTA(Tabela1[Col],_xlfn.ANCHORARRAY(B2)))"
+        );
     }
 
     #[test]
@@ -252,5 +265,20 @@ mod tests {
             .expect("spawn")
             .join()
             .expect("no stack overflow");
+    }
+
+    #[test]
+    fn let_lambda_params() {
+        assert_eq!(to_file(&Formula::new("LET(x,1,x+1)")), "_xlfn.LET(_xlpm.x,1,_xlpm.x+1)");
+        assert_eq!(to_file(&Formula::new("LET(x,A1*2,y,x+1,x*y)")), "_xlfn.LET(_xlpm.x,A1*2,_xlpm.y,_xlpm.x+1,_xlpm.x*_xlpm.y)");
+        assert_eq!(to_file(&Formula::new("LAMBDA(a,b,a^2+b)(3,4)")), "_xlfn.LAMBDA(_xlpm.a,_xlpm.b,_xlpm.a^2+_xlpm.b)(3,4)");
+        // A name outside the scope stays a plain defined name.
+        assert_eq!(to_file(&Formula::new("LET(x,1,x)+x")), "_xlfn.LET(_xlpm.x,1,_xlpm.x)+x");
+        assert_eq!(from_file("_xlfn.LET(_xlpm.x,1,_xlpm.x+1)"), "LET(x,1,x+1)");
+        assert_eq!(from_file("_xlfn.LAMBDA(_xlpm.a,_xlpm.a*2)(3)"), "LAMBDA(a,a*2)(3)");
+        // A LET-bound LAMBDA called by name.
+        // The marker keeps the parameter's declared spelling, not the parser's upper-cased call name.
+        assert_eq!(to_file(&Formula::new("LET(f,LAMBDA(x,x*2),f(3))")), "_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.f(3))");
+        assert_eq!(from_file("_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.f(3))"), "LET(f,LAMBDA(x,x*2),F(3))");
     }
 }

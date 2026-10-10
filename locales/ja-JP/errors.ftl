@@ -9,3 +9,4 @@ error-internal = 「{ $command }」で内部エラーが発生しました (ブ�
 error-other = { $message }
 error-invalid-formula = この数式には問題があります: { $message }
 error-invalid-locale = 言語または地域の設定が正しくありません: { $message }
+error-protected-sheet = この変更はできません: セルまたはグラフが保護されたシート上にあります。

@@ -9,3 +9,4 @@ error-internal = Erro interno em “{ $command }” (a pasta de trabalho foi man
 error-other = { $message }
 error-invalid-formula = Há um problema com esta fórmula: { $message }
 error-invalid-locale = As configurações de idioma ou de região não são válidas: { $message }
+error-protected-sheet = Esta alteração não é permitida: a célula ou o gráfico está em uma planilha protegida.

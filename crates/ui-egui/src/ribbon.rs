@@ -160,6 +160,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
+                    file_menu(app, ui);
                     let mut tabs: Vec<&str> = TABS.to_vec();
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
@@ -229,6 +230,36 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 });
             });
         });
+}
+
+fn file_menu(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let l = app.l10n;
+    let name = tab_name(l, "File");
+    let font = theme::ui_font(13.5);
+    let width = (ui.painter().layout_no_wrap(name.to_string(), font.clone(), t.text).size().x + 22.0).max(46.0);
+    let label = egui::RichText::new(name).font(font).color(t.accent);
+    let file = ui.add_sized(vec2(width, 30.0), egui::Button::new(label).frame(false));
+    egui::Popup::menu(&file).show(|ui| {
+        for (label, id, needs_document) in [
+            (msg!("New Workbook"), "file.new", false),
+            (msg!("Open…"), "file.open", false),
+            (msg!("Save"), "file.save", true),
+            (msg!("Save As…"), "file.saveAs", true),
+            (msg!("Close"), "file.close", true),
+        ] {
+            if id == "file.save" || id == "file.close" {
+                ui.separator();
+            }
+            if ui.add_enabled(!needs_document || app.session.active().is_some(), egui::Button::new(l.tr(label))).clicked() {
+                // File operations must include the cell the user is still editing.
+                if app.commit_edit(0, 0, false, false) {
+                    app.run_or_alert(id, json!({}));
+                }
+                ui.close();
+            }
+        }
+    });
 }
 
 fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
@@ -391,6 +422,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             if b {
                 act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
             }
+            ba.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), l.tr("Border presets")));
             egui::Popup::menu(&ba).show(|ui| {
                 for (label, preset) in [
                     (msg!("Bottom Border"), "bottom"),
@@ -408,7 +440,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     (msg!("Top and Double Bottom Border"), "topDoubleBottom"),
                     (msg!("Inside Borders"), "inside"),
                 ] {
-                    if ui.add(egui::Button::new(&*l.tr(label)).frame(false).min_size(vec2(220.0, 20.0))).clicked() {
+                    if crate::border_preview::preset_button(ui, &l.tr(label), preset).clicked() {
                         app.grid.last_border = preset.to_string();
                         act(app, "home.borders", json!({"preset": preset}));
                     }
@@ -1730,11 +1762,18 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    let mut dark = app.ui.dark;
     ui.vertical(|ui| {
-        if ui.checkbox(&mut dark, l.tr("Dark Mode")).changed() {
-            app.ui.dark = dark;
-        }
+        ui.label(l.tr("Display theme"));
+        let mode = app.ui.theme_mode();
+        let choices = [("system", "ui-theme-system"), ("light", "ui-theme-light"), ("dark", "ui-theme-dark")];
+        let label = choices.iter().find(|(value, _)| *value == mode).map(|(_, key)| l.text(key, &[]));
+        egui::ComboBox::from_id_salt("display_theme").selected_text(label.unwrap_or_default()).width(88.0).show_ui(ui, |ui| {
+            for (value, key) in choices {
+                if ui.selectable_label(mode == value, l.text(key, &[])).clicked() {
+                    act(app, "view.theme", json!({"mode": value}));
+                }
+            }
+        });
     });
 }
 

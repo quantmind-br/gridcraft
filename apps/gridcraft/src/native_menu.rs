@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, channel};
 use gridcraft_l10n::Localizer;
 use gridcraft_ui_egui::SheetApp;
 use muda::accelerator::Accelerator;
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
 
 use crate::menu_model::{self, ResolvedEntry};
@@ -22,10 +22,23 @@ pub struct NativeMenu {
     /// Interface language the menu bar was built for.
     tag: &'static str,
     events: Receiver<MenuEvent>,
+    theme_items: Vec<(&'static str, CheckMenuItem)>,
 }
 
-/// Builds the menu bar for `loc` and makes it the application's main menu.
-fn build(loc: &Localizer) -> Menu {
+fn select_theme(app: &mut SheetApp, id: &str) -> bool {
+    let mode = match id {
+        "theme:system" => "system",
+        "theme:light" => "light",
+        "theme:dark" => "dark",
+        _ => return false,
+    };
+    app.run_or_alert("view.theme", json!({"mode": mode}));
+    true
+}
+
+/// Builds the menu bar for `loc` and makes it the application's main menu. Also returns the check
+/// items of the Display Theme submenu, which `NativeMenu::poll` keeps in step with the preference.
+fn build(loc: &Localizer) -> (Menu, Vec<(&'static str, CheckMenuItem)>) {
     let menu = Menu::new();
     let app_menu = Submenu::new("GridCraft", true);
     let about = MenuItem::with_id(menu_model::ABOUT_ACTION, loc.plain(menu_model::ABOUT_KEY), true, None);
@@ -41,12 +54,22 @@ fn build(loc: &Localizer) -> Menu {
         &PredefinedMenuItem::quit(None),
     ]);
     let _ = menu.append(&app_menu);
+    let mut theme_items = Vec::new();
     for m in menu_model::resolve(loc) {
         let sub = Submenu::new(m.title, true);
         for entry in m.entries {
             match entry {
                 ResolvedEntry::Separator => {
                     let _ = sub.append(&PredefinedMenuItem::separator());
+                }
+                ResolvedEntry::Item(item) if item.action == menu_model::THEME_ACTION => {
+                    let themes = Submenu::new(item.label, true);
+                    for (mode, key) in menu_model::THEME_CHOICES {
+                        let choice = CheckMenuItem::with_id(format!("theme:{mode}"), loc.plain(key), true, false, None);
+                        let _ = themes.append(&choice);
+                        theme_items.push((mode, choice));
+                    }
+                    let _ = sub.append(&themes);
                 }
                 ResolvedEntry::Item(item) => {
                     let accel = item.accel.and_then(|a| Accelerator::from_str(a).ok());
@@ -57,32 +80,35 @@ fn build(loc: &Localizer) -> Menu {
         let _ = menu.append(&sub);
     }
     menu.init_for_nsapp();
-    menu
+    (menu, theme_items)
 }
 
 impl NativeMenu {
     /// Installs the menu bar for the interface language of `app`'s session.
     pub fn install(ctx: &egui::Context, app: &SheetApp) -> NativeMenu {
         let loc = Localizer::new(app.session.locale().ui.tag);
-        let menu = build(&loc);
+        let (menu, theme_items) = build(&loc);
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, tag: loc.tag(), events: rx }
+        NativeMenu { _menu: menu, tag: loc.tag(), events: rx, theme_items }
     }
 
     /// Rebuilds the menu bar when the interface language changed, then runs the chosen items.
     pub fn poll(&mut self, app: &mut SheetApp, ctx: &egui::Context) {
         let loc = Localizer::new(app.session.locale().ui.tag);
         if loc.tag() != self.tag {
-            self._menu = build(&loc);
+            (self._menu, self.theme_items) = build(&loc);
             self.tag = loc.tag();
         }
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
+            if select_theme(app, &id) {
+                continue;
+            }
             if let Some(url) = id.strip_prefix("url:") {
                 if let Some(open) = &app.services.open_url {
                     open(url);
@@ -109,5 +135,28 @@ impl NativeMenu {
                 app.run_or_alert(&id, json!({}));
             }
         }
+        for (mode, item) in &self.theme_items {
+            let checked = app.ui.theme_mode() == *mode;
+            if item.is_checked() != checked {
+                item.set_checked(checked);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_choices_use_the_shared_preference_command() {
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        for mode in ["dark", "system", "light"] {
+            assert!(select_theme(&mut app, &format!("theme:{mode}")));
+            assert_eq!(app.ui.theme_mode(), mode);
+            assert!(app.message.is_none());
+        }
+        assert!(!select_theme(&mut app, "view.formulaBar"));
+        assert_eq!(app.ui.theme_mode(), "light");
     }
 }

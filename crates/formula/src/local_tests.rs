@@ -38,6 +38,45 @@ fn pt_br_reference_cases() {
 }
 
 #[test]
+fn spill_operator_in_local_dialects() {
+    let pt = pt();
+    let de = dialect("de-DE", "de-DE");
+    let ja = dialect("ja-JP", "ja-JP");
+    for (src, canonical, d) in [
+        ("SOMA(A1#)", "SUM(A1#)", &pt),
+        ("CONT.VALORES(Tabela1[Col];A1#)", "COUNTA(Tabela1[Col],A1#)", &pt),
+        ("SE(A1#=#N/D;Planilha1!$B$2#;#NOME?)", "IF(A1#=#N/A,Planilha1!$B$2#,#NAME?)", &pt),
+        ("SOMA(A1#;1,5)", "SUM(A1#,1.5)", &pt),
+        ("{1\\2;3\\4}&A1#", "{1,2;3,4}&A1#", &pt),
+        ("SUMME(A1#;B2#)", "SUM(A1#,B2#)", &de),
+        ("WENN(A1#=#NV;'Tab 1'!A1#;#WERT!)", "IF(A1#=#N/A,'Tab 1'!A1#,#VALUE!)", &de),
+        ("SUM(A1#,B2#)", "SUM(A1#,B2#)", &ja),
+        ("@A1#", "@A1#", &pt),
+    ] {
+        let e = local(src, d);
+        assert_eq!(e, parse(canonical).unwrap(), "{src}");
+        assert_eq!(print(&e), canonical, "{src}");
+        assert_eq!(local(&print_local(&e, d), d), e, "{src}");
+    }
+    assert_eq!(print_local(&parse("COUNTA(Tabela1[Col],A1#)").unwrap(), &pt), "CONT.VALORES(Tabela1[Col];A1#)");
+    // The `#` right after a reference is the operator; anywhere else it starts an error literal.
+    let toks = tokenize_local("A1#;#N/D", &pt).unwrap();
+    let kinds: Vec<&Tok> = toks.iter().map(|t| &t.tok).collect();
+    assert_eq!(kinds, [&Tok::Word("A1".into()), &Tok::Op("#"), &Tok::Comma, &Tok::Error(CellError::NA), &Tok::Eof]);
+    let src = "SOMA(A1#)";
+    let hash = tokenize_local(src, &pt).unwrap().into_iter().find(|t| t.tok == Tok::Op("#")).unwrap();
+    assert_eq!(src.get(hash.start..hash.end), Some("#"));
+    // Only a cell can spill; a localized error literal after a reference is not an operator use.
+    assert!(parse_local("A1:B2#", &pt).is_err());
+    assert!(parse_local("Nome#", &pt).is_err());
+    assert!(parse_local("A1 #N/D", &pt).is_err());
+    // Files spell the operator ANCHORARRAY whatever the dialect.
+    assert_eq!(local("_xlfn.ANCHORARRAY(B2)", &pt), parse("B2#").unwrap());
+    assert_eq!(print_local(&parse("#REF!").unwrap(), &pt), "#REF!");
+    assert_eq!(parse("A1#").unwrap(), parse_local("A1#", &Dialect::INVARIANT).unwrap());
+}
+
+#[test]
 fn pt_br_union_is_a_union() {
     let e = local("SOMA((A1;B1))", &pt());
     let Expr::Call(name, args) = &e else { panic!("{e:?}") };
@@ -319,6 +358,15 @@ fn gen_ref(g: &mut Lcg) -> Reference {
     Reference { sheet, kind }
 }
 
+/// `A1#`: the spill operator applies to a single cell, possibly on another sheet.
+fn gen_spill(g: &mut Lcg) -> Expr {
+    let sheet = match gen_sheet(g) {
+        SheetSel::Span(..) => SheetSel::Current,
+        s => s,
+    };
+    Expr::Unary(UnOp::Spill, Box::new(Expr::Ref(Reference { sheet, kind: RefKind::Cell(gen_anchor(g)) })))
+}
+
 fn gen_number(g: &mut Lcg) -> f64 {
     match g.below(5) {
         0 => g.below(1000) as f64,
@@ -357,6 +405,7 @@ fn gen_struct(g: &mut Lcg) -> StructRef {
 fn gen_atom(g: &mut Lcg, depth: usize) -> Expr {
     match g.below(if depth == 0 { 6 } else { 9 }) {
         0 | 1 => gen_const(g),
+        2 | 3 if g.below(5) == 0 => gen_spill(g),
         2 | 3 => Expr::Ref(gen_ref(g)),
         4 => Expr::Name((*g.pick(&NAMES)).to_string()),
         5 => Expr::Struct(gen_struct(g)),

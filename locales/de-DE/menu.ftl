@@ -22,7 +22,10 @@ menu-edit-delete = Löschen…
 ## View
 
 menu-view-formula-bar = Bearbeitungsleiste
-menu-view-dark-mode = Dunkler Modus
+menu-view-display-theme = Anzeigedesign
+menu-theme-system = System
+menu-theme-light = Hell
+menu-theme-dark = Dunkel
 menu-view-collapse-ribbon = Menüband reduzieren
 menu-view-zoom = Zoom…
 

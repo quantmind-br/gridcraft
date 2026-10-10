@@ -999,7 +999,11 @@ fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
             let si = sheet.and_then(|n| d.wb.sheet_index(&n)).unwrap_or(d.wb.active_sheet);
             let c = CellRef::parse(body).unwrap_or_default();
             let sh = d.wb.sheet(si);
-            let formula = sh.and_then(|s| s.cell(c)).and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text));
+            let formula = sh
+                .filter(|s| !crate::display::formula_hidden(&d.wb, s, c))
+                .and_then(|s| s.cell(c))
+                .and_then(|x| x.formula.as_ref())
+                .map(|f| format!("={}", f.text));
             json!({
                 "cell": w,
                 "value": sh.map(|s| s.value(c).display()),

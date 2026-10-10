@@ -1006,8 +1006,9 @@ fn countif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(range.iter().filter(|v| crit.matches(v)).count() as f64)
 }
 
-/// SUMIF / AVERAGEIF: matched numbers from the sum range, which takes the criteria range's
-/// shape anchored at its own top-left.
+/// SUMIF / AVERAGEIF: matched numbers from the sum range, read at the criteria range's positions.
+/// Excel sizes a sum range reference like the criteria range, anchored at its own top-left cell;
+/// the evaluator does that resizing (it has the references), so cells line up one to one here.
 fn if_numbers(ctx: &dyn Ctx, a: &[Arg]) -> R<Vec<f64>> {
     let range = as_array(&crate::util::arg(a, 0)?.value);
     let crit = Criterion::parse(ctx, &crate::util::arg(a, 1)?.value.scalar());

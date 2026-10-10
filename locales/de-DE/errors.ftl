@@ -9,3 +9,4 @@ error-internal = Interner Fehler in „{ $command }“ (die Arbeitsmappe wurde u
 error-other = { $message }
 error-invalid-formula = Mit dieser Formel besteht ein Problem: { $message }
 error-invalid-locale = Die Sprach- oder Regionseinstellungen sind ungültig: { $message }
+error-protected-sheet = Diese Änderung ist nicht zulässig: Die Zelle oder das Diagramm befindet sich in einem geschützten Blatt.

@@ -22,7 +22,10 @@ menu-edit-delete = Eliminar…
 ## Ver
 
 menu-view-formula-bar = Barra de Fórmulas
-menu-view-dark-mode = Modo Escuro
+menu-view-display-theme = Tema de Apresentação
+menu-theme-system = Sistema
+menu-theme-light = Claro
+menu-theme-dark = Escuro
 menu-view-collapse-ribbon = Reduzir o Friso
 menu-view-zoom = Zoom…
 

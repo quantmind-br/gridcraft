@@ -55,6 +55,10 @@ pub enum EngineError {
     /// Language or regional settings that cannot be applied.
     #[error("invalid language or regional settings: {0}")]
     InvalidLocale(String),
+    /// An edit of a locked cell (or another change the sheet protection forbids) on a protected
+    /// sheet.
+    #[error("The cell or chart you're trying to change is on a protected sheet.")]
+    Protected,
 }
 
 impl EngineError {
@@ -70,6 +74,7 @@ impl EngineError {
             EngineError::Internal(..) => "internal",
             EngineError::InvalidFormula(_) => "invalid-formula",
             EngineError::InvalidLocale(_) => "invalid-locale",
+            EngineError::Protected => "protected-sheet",
         }
     }
 
@@ -79,7 +84,7 @@ impl EngineError {
             EngineError::UnknownCommand(c) => vec![("command", c.clone())],
             EngineError::Disabled(c, why) => vec![("command", c.clone()), ("reason", why.clone())],
             EngineError::BadParams { cmd, msg } => vec![("command", cmd.clone()), ("message", msg.clone())],
-            EngineError::NoDocument => vec![],
+            EngineError::NoDocument | EngineError::Protected => vec![],
             EngineError::Other(m) | EngineError::InvalidFormula(m) | EngineError::InvalidLocale(m) => vec![("message", m.clone())],
             EngineError::Internal(c, m) => vec![("command", c.clone()), ("message", m.clone())],
         }
