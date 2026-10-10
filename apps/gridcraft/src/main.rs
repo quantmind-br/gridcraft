@@ -5,14 +5,20 @@
 //! `--control <port>` (or `GRIDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control
 //! server: `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
 //! See `gridcraft_ui_egui::control` and `docs/control-protocol.md` for the methods.
+//!
+//! Language and regional format: the interface language, the formula language and the regional
+//! format follow the operating system (detected at every start with `sys-locale`) until changed in
+//! Options › Language or with `app.setLocale`; the choice is kept in `prefs.json`.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod control_server;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod menu_model;
 #[cfg(target_os = "macos")]
 mod native_menu;
 
-use gridcraft_engine::Session;
+use gridcraft_engine::{Prefs, Session};
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
@@ -23,9 +29,9 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         {
             if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(ctx));
+                self.1 = Some(native_menu::NativeMenu::install(ctx, &self.0));
             }
-            if let Some(m) = &self.1 {
+            if let Some(m) = &mut self.1 {
                 m.poll(&mut self.0, ctx);
             }
         }
@@ -61,7 +67,35 @@ fn config_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-fn load_prefs(app: &mut SheetApp) {
+/// The operating system's locale tag (`pt-BR`); en-US when it cannot be read.
+fn system_locale() -> String {
+    sys_locale::get_locale().unwrap_or_else(|| "en-US".to_string())
+}
+
+fn read_prefs(dir: &std::path::Path) -> Option<Prefs> {
+    serde_json::from_slice(&std::fs::read(dir.join("prefs.json")).ok()?).ok()
+}
+
+fn write_prefs(dir: &std::path::Path, prefs: &Prefs) {
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(b) = serde_json::to_vec_pretty(prefs) {
+        let _ = std::fs::write(dir.join("prefs.json"), b);
+    }
+}
+
+/// Loads `prefs.json` into the session, then resolves the language and regional format ("system"
+/// follows the operating system) so that workbooks created afterwards use them.
+fn load_session_prefs(session: &mut Session) {
+    if std::env::var_os("GRIDCRAFT_NO_PREFS").is_none()
+        && let Some(dir) = config_dir()
+        && let Some(p) = read_prefs(&dir)
+    {
+        session.prefs = p;
+    }
+    session.set_system_locale(&system_locale());
+}
+
+fn load_ui_prefs(app: &mut SheetApp) {
     if std::env::var_os("GRIDCRAFT_NO_PREFS").is_some() {
         return;
     }
@@ -70,11 +104,6 @@ fn load_prefs(app: &mut SheetApp) {
         && let Ok(ui) = serde_json::from_slice(&b)
     {
         app.ui = ui;
-    }
-    if let Ok(b) = std::fs::read(dir.join("prefs.json"))
-        && let Ok(p) = serde_json::from_slice(&b)
-    {
-        app.session.prefs = p;
     }
 }
 
@@ -87,9 +116,7 @@ fn save_prefs(app: &SheetApp) {
     if let Ok(b) = serde_json::to_vec_pretty(&app.ui) {
         let _ = std::fs::write(dir.join("ui.json"), b);
     }
-    if let Ok(b) = serde_json::to_vec_pretty(&app.session.prefs) {
-        let _ = std::fs::write(dir.join("prefs.json"), b);
-    }
+    write_prefs(&dir, &app.session.prefs);
 }
 
 fn services() -> Services {
@@ -158,6 +185,7 @@ fn main() -> eframe::Result<()> {
         i += 1;
     }
     let mut session = Session::new();
+    load_session_prefs(&mut session);
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {
@@ -173,7 +201,7 @@ fn main() -> eframe::Result<()> {
     }
     let mut app = SheetApp::new(session, services());
     let control_port = control_port;
-    load_prefs(&mut app);
+    load_ui_prefs(&mut app);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])
@@ -205,4 +233,69 @@ fn main() -> eframe::Result<()> {
             )))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("gridcraft-app-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn language_prefs_survive_prefs_json() {
+        let dir = temp_dir("prefs");
+        let p = Prefs {
+            ui_language: "pt-BR".into(),
+            formula_language: "en-US".into(),
+            regional_format: "de-DE".into(),
+            use_system_separators: false,
+            decimal_separator: ",".into(),
+            thousands_separator: ".".into(),
+            ..Prefs::default()
+        };
+        write_prefs(&dir, &p);
+        let text = std::fs::read_to_string(dir.join("prefs.json")).unwrap();
+        for field in ["uiLanguage", "formulaLanguage", "regionalFormat", "useSystemSeparators", "decimalSeparator", "thousandsSeparator"] {
+            assert!(text.contains(field), "{field} missing from {text}");
+        }
+        let back = read_prefs(&dir).unwrap();
+        assert_eq!(back.ui_language, "pt-BR");
+        assert_eq!(back.formula_language, "en-US");
+        assert_eq!(back.regional_format, "de-DE");
+        assert!(!back.use_system_separators);
+        assert_eq!((back.decimal_separator.as_str(), back.thousands_separator.as_str()), (",", "."));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefs_file_from_an_older_version_gets_system_defaults() {
+        let dir = temp_dir("old-prefs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("prefs.json"), r#"{"autocomplete": false}"#).unwrap();
+        let p = read_prefs(&dir).unwrap();
+        assert!(!p.autocomplete);
+        assert_eq!((p.ui_language.as_str(), p.formula_language.as_str(), p.regional_format.as_str()), ("system", "followUi", "system"));
+        assert!(p.use_system_separators);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saved_choice_wins_over_the_system_locale_and_system_follows_it() {
+        let mut saved = Session::new();
+        saved.prefs.regional_format = "pt-BR".into();
+        saved.set_system_locale("en-US");
+        assert_eq!(saved.locale().regional.tag, "pt-BR");
+
+        let mut follows = Session::new();
+        follows.set_system_locale("de_DE.UTF-8");
+        assert_eq!(follows.locale().regional.tag, "de-DE");
+        // The system language changing between starts is picked up again.
+        follows.set_system_locale("fr-FR");
+        assert_eq!(follows.locale().regional.tag, "fr-FR");
+    }
 }

@@ -90,6 +90,9 @@
   Flash Fill, data validation, outlining and subtotals.
 - **Fast.** Copy-on-write workbooks (undo snapshots are nearly free), incremental recalculation,
   and a virtualised grid that only lays out what's on screen.
+- **Multilingual.** The interface and the formula language in 11 languages, the way Excel does
+  it: `=SOMA(1,5;2)` in Portuguese, `=SUMME(1,5;2)` in German, `=SUM(1.5,2)` in English, with the
+  same canonical file underneath.
 - **Agent-native.** Every ribbon button, menu item, dialog, keystroke and mouse gesture is a
   command that agents can run over a JSON control channel, an **MCP server**, or the CLI.
 - **Everywhere.** One Rust codebase for desktop and the web. No subscription, no licence server,
@@ -139,10 +142,11 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 
 | Layer | Crates |
 |---|---|
-| L0 | `core` (addresses, values, errors, dates, input parsing) · `numfmt` (number format codes) |
+| L0 | `core` (addresses, values, errors, dates, input parsing) · `numfmt` (number format codes) · `locale` (formula languages and regional formats) |
 | L1 | `formula` (lexer, parser, printer, reference adjustment) · `functions` (worksheet function library) |
 | L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX and CSV) |
 | L3 | `chart` (toolkit-free chart layout and rendering) |
+| L4 | `l10n` (interface messages in Fluent, localized keyboard shortcuts) |
 | L5 | `engine` (session, commands, history, clipboard, fill, sort, filter, file I/O) |
 | L6 | `ui-egui` (Excel-style UI, control channel) · `mcp` (MCP server) |
 | L7 | `apps/gridcraft`, `apps/gridcraft-cli`, `apps/gridcraft-web` |

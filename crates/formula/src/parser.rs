@@ -6,7 +6,9 @@ use gridcraft_core::addr::{letters_to_col, parse_a1_prefix};
 use gridcraft_core::{CellError, MAX_ROWS};
 
 use crate::ast::*;
-use crate::lexer::{Tok, Token, tokenize};
+use gridcraft_locale::{Dialect, TABLE_ITEM_ALL, TABLE_ITEM_DATA, TABLE_ITEM_HEADERS, TABLE_ITEM_THIS_ROW, TABLE_ITEM_TOTALS};
+
+use crate::lexer::{Tok, Token, tokenize_local};
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[error("{msg}")]
@@ -17,13 +19,18 @@ pub struct ParseError {
 
 const MAX_DEPTH: usize = 256;
 
-/// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
-/// for `=`.
+/// Parses canonical (en-US) formula text. A leading `=` is accepted and skipped.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
+    parse_local(src, &Dialect::INVARIANT)
+}
+
+/// Parses formula text written in dialect `d` (localized function names, booleans, errors and
+/// separators) into the canonical syntax tree. A leading `=` is accepted and skipped.
+pub fn parse_local(src: &str, d: &Dialect) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
-    let toks = tokenize(body).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
+    let toks = tokenize_local(body, d).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0 };
+    let mut p = Parser { toks, i: 0, depth: 0, d };
     let e = p.expr(0, false)?;
     match p.peek() {
         Tok::Eof => Ok(e),
@@ -58,10 +65,11 @@ fn significant_spaces(toks: Vec<Token>) -> Vec<Token> {
     out
 }
 
-struct Parser {
+struct Parser<'a> {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
+    d: &'a Dialect<'a>,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -83,18 +91,57 @@ fn word_is_cell(w: &str) -> Option<Anchor> {
     Some(Anchor { row, col, row_abs, col_abs })
 }
 
-/// `_xlfn.XLOOKUP` → `XLOOKUP`.
-pub fn normalize_function_name(name: &str) -> String {
-    let u = name.to_ascii_uppercase();
-    for p in ["_XLFN._XLWS.", "_XLFN.", "_XLWS.", "_XLUDF."] {
-        if let Some(r) = u.strip_prefix(p) {
-            return r.to_string();
-        }
+/// `_xlfn.` / `_xlfn._xlws.` / `_xlws.` prefixes of file function names (upper case).
+pub(crate) const FILE_PREFIXES: [&str; 3] = ["_XLFN._XLWS.", "_XLFN.", "_XLWS."];
+
+/// Prefix of a function name Excel does not define: user-defined or unresolved (upper case).
+pub(crate) const UDF_PREFIX: &str = "_XLUDF.";
+
+/// Marker Excel stores before LET/LAMBDA parameter names in files (`_xlpm.x`).
+const PARAM_PREFIX: &str = "_xlpm.";
+
+/// A name without the file-only LET/LAMBDA parameter marker.
+fn strip_param_prefix(name: &str) -> &str {
+    match name.get(..PARAM_PREFIX.len()) {
+        Some(p) if p.eq_ignore_ascii_case(PARAM_PREFIX) => name.get(PARAM_PREFIX.len()..).unwrap_or(name),
+        _ => name,
     }
-    u
 }
 
-impl Parser {
+/// The canonical function name for a name written in dialect `d`.
+///
+/// - A `_xlpm.` call target is a LET/LAMBDA parameter being called: the marker is dropped and the
+///   name is never resolved as a built-in.
+/// - File-style prefixes (`_xlfn.XLOOKUP`) are stripped when the rest is a built-in; other
+///   prefixed names keep their full upper-case spelling (`_XLFN.FORECAST.ETS`, `_XLUDF.MYFN`).
+/// - A local name resolves to its canonical function (`SOMA` → `SUM` in pt-BR).
+/// - A canonical built-in name that the dialect does not know (`SUM` in pt-BR) is an unresolved
+///   user-defined function, as in Excel: `_XLUDF.SUM`, which evaluates to `#NAME?`.
+/// - Any other name is upper-cased in ASCII only: the evaluator binds LET/LAMBDA names by ASCII
+///   case, so `ação(1)` must stay `AçãO`, not `AÇÃO`.
+fn resolve_function(raw: &str, d: &Dialect) -> String {
+    let upper = raw.to_ascii_uppercase();
+    let bare = strip_param_prefix(raw);
+    if bare.len() != raw.len() {
+        return bare.to_ascii_uppercase();
+    }
+    for p in FILE_PREFIXES {
+        if let Some(rest) = upper.strip_prefix(p)
+            && crate::catalog::is_builtin(rest)
+        {
+            return rest.to_string();
+        }
+    }
+    if upper.starts_with(UDF_PREFIX) || FILE_PREFIXES.iter().any(|p| upper.starts_with(p)) {
+        return upper;
+    }
+    if let Some(c) = d.names.canonical_function(raw) {
+        return c.to_string();
+    }
+    if crate::catalog::is_builtin(&upper) { format!("_XLUDF.{upper}") } else { upper }
+}
+
+impl Parser<'_> {
     fn peek(&self) -> &Tok {
         self.toks.get(self.i).map(|t| &t.tok).unwrap_or(&Tok::Eof)
     }
@@ -222,7 +269,7 @@ impl Parser {
             }
             Tok::LBrace => self.array(),
             Tok::Func(name) => {
-                let name = normalize_function_name(&name);
+                let name = resolve_function(&name, self.d);
                 let args = self.args()?;
                 Ok(Expr::Call(name, args))
             }
@@ -242,11 +289,11 @@ impl Parser {
                     && word_is_cell(&w).is_none()
                 {
                     let Tok::Struct(body) = self.next() else { return Err(self.err("internal")) };
-                    return Ok(Expr::Struct(parse_struct(&w, &body)));
+                    return Ok(Expr::Struct(parse_struct(&w, &body, self.d)));
                 }
                 self.reference_from_word(SheetSel::Current, &w)
             }
-            Tok::Struct(body) => Ok(Expr::Struct(parse_struct("", &body))),
+            Tok::Struct(body) => Ok(Expr::Struct(parse_struct("", &body, self.d))),
             t => Err(self.err(format!("unexpected {}", describe(&t)))),
         }
     }
@@ -294,7 +341,15 @@ impl Parser {
         if w.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return Err(self.err(format!("unexpected `{w}`")));
         }
-        Ok(Expr::Name(w.to_string()))
+        // A canonical boolean that is not a literal of this dialect would print and re-read as a
+        // boolean, changing meaning; reject it and name the dialect's literal.
+        for canonical in [true, false] {
+            if w.eq_ignore_ascii_case(if canonical { "TRUE" } else { "FALSE" }) && self.d.names.parse_bool(w).is_none() {
+                let local = self.d.names.bool_text(canonical);
+                return Err(self.err(format!("`{w}` is not a boolean in this language; write `{local}`")));
+            }
+        }
+        Ok(Expr::Name(strip_param_prefix(w).to_string()))
     }
 
     fn array(&mut self) -> Result<Expr, ParseError> {
@@ -345,8 +400,9 @@ fn combine(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
     Expr::Binary(op, Box::new(lhs), Box::new(rhs))
 }
 
-/// Parses the inside of `Table[...]`.
-pub fn parse_struct(table: &str, body: &str) -> StructRef {
+/// Parses the inside of `Table[...]` in dialect `d`: items are the language's (`#Tudo`), the parts
+/// of a multi-part specifier are separated by the region's list separator.
+pub fn parse_struct(table: &str, body: &str, d: &Dialect) -> StructRef {
     let mut specifiers = Vec::new();
     let mut cols: Vec<String> = Vec::new();
     let body = body.trim();
@@ -365,12 +421,12 @@ pub fn parse_struct(table: &str, body: &str) -> StructRef {
         out
     };
     let item = |s: &str| -> Option<StructItem> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "#all" => Some(StructItem::All),
-            "#data" => Some(StructItem::Data),
-            "#headers" => Some(StructItem::Headers),
-            "#totals" => Some(StructItem::Totals),
-            "#this row" => Some(StructItem::ThisRow),
+        match d.names.table_item(s)? {
+            TABLE_ITEM_ALL => Some(StructItem::All),
+            TABLE_ITEM_DATA => Some(StructItem::Data),
+            TABLE_ITEM_HEADERS => Some(StructItem::Headers),
+            TABLE_ITEM_TOTALS => Some(StructItem::Totals),
+            TABLE_ITEM_THIS_ROW => Some(StructItem::ThisRow),
             _ => None,
         }
     };
@@ -418,7 +474,7 @@ pub fn parse_struct(table: &str, body: &str) -> StructRef {
                         parts.push(std::mem::take(&mut cur));
                     }
                 }
-                ',' if depth == 0 => {}
+                c if c == d.regional.list && depth == 0 => {}
                 ':' if depth == 0 => parts.push(":".into()),
                 _ if depth > 0 => cur.push(c),
                 _ => {}

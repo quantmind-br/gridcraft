@@ -1,8 +1,14 @@
-//! Tokenizer for Excel formulas (A1 style, en-US separators).
+//! Tokenizer for Excel formulas.
+//!
+//! The text is read in a [`Dialect`]: numbers use the region's decimal separator, the region's
+//! list separator lexes as [`Tok::Comma`] outside array constants, and inside `{}` the region's
+//! column and row separators lex as [`Tok::Comma`] and [`Tok::Semicolon`]. Boolean and error
+//! literals are the dialect language's. The parser therefore only sees abstract tokens.
 //!
 //! Token spans are byte offsets into the source, which the editor uses to colour references.
 
 use gridcraft_core::CellError;
+use gridcraft_locale::{Dialect, Regional};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tok {
@@ -45,12 +51,21 @@ pub struct LexError {
     pub pos: usize,
 }
 
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '\\' | '?')
+/// Characters that may be part of a word. Inside array constants the region's column and row
+/// separators are not word characters (`.` in German, `\` in Portuguese).
+fn is_word_char(c: char, in_array: bool, r: &Regional) -> bool {
+    c.is_alphanumeric() || (matches!(c, '_' | '.' | '$' | '\\' | '?') && !(in_array && (c == r.array_col || c == r.array_row)))
 }
 
-/// Tokenizes formula text (without the leading `=`).
+/// Tokenizes canonical (en-US) formula text (without the leading `=`).
 pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
+    tokenize_local(src, &Dialect::INVARIANT)
+}
+
+/// Tokenizes formula text (without the leading `=`) written in `d`.
+pub fn tokenize_local(src: &str, d: &Dialect) -> Result<Vec<Token>, LexError> {
+    let r = d.regional;
+    let mut braces = 0usize;
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let n = chars.len();
     let pos_of = |i: usize| chars.get(i).map(|c| c.0).unwrap_or(src.len());
@@ -59,6 +74,8 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
     let mut i = 0;
     while i < n {
         let start = pos_of(i);
+        let in_array = braces > 0;
+        let word = |x: char| is_word_char(x, in_array, r);
         let Some(c) = ch(i) else { break };
         let push = |out: &mut Vec<Token>, tok: Tok, end_i: usize| out.push(Token { tok, start, end: pos_of(end_i) });
         match c {
@@ -127,16 +144,13 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             '#' => {
                 // Error literal, or #-prefixed struct specifier (only inside [] which we lex as Struct).
                 let rest = src.get(start..).unwrap_or("");
-                let mut found = None;
-                for e in CellError::ALL {
-                    let t = e.as_str();
-                    if rest.len() >= t.len() && rest.get(..t.len()).is_some_and(|p| p.eq_ignore_ascii_case(t)) {
-                        found = Some(e);
-                        break;
-                    }
-                }
-                let Some(e) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
-                let len = e.as_str().chars().count();
+                let Some((canonical, bytes)) = d.names.error_prefix(rest) else {
+                    return Err(LexError { msg: "unknown error literal".into(), pos: start });
+                };
+                let Some(e) = CellError::parse(canonical) else {
+                    return Err(LexError { msg: "unknown error literal".into(), pos: start });
+                };
+                let len = rest.get(..bytes).map_or(0, |s| s.chars().count());
                 // `#REF!A1` style is not valid; `#REF!` is an error literal.
                 push(&mut out, Tok::Error(e), i + len);
                 i += len;
@@ -167,7 +181,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 push(&mut out, Tok::Struct(inner), j);
                 i = j;
             }
-            '0'..='9' | '.' if c != '.' || ch(i + 1).is_some_and(|d| d.is_ascii_digit()) => {
+            c if c.is_ascii_digit() || (c == r.decimal && ch(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
                 // Number, unless it is a row range like 1:3 (handled by parser via Word) — numbers
                 // followed by ':' and digits are row refs: lex as Word.
                 let mut j = i;
@@ -188,7 +202,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                     i = j;
                     continue;
                 }
-                if ch(j) == Some('.') {
+                if ch(j) == Some(r.decimal) {
                     j += 1;
                     while ch(j).is_some_and(|d| d.is_ascii_digit()) {
                         j += 1;
@@ -206,7 +220,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                         j = k;
                     }
                 }
-                let text = src.get(start..pos_of(j)).unwrap_or("");
+                let text: String = src.get(start..pos_of(j)).unwrap_or("").chars().map(|c| if c == r.decimal { '.' } else { c }).collect();
                 let v: f64 = text.parse().map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
                 push(&mut out, Tok::Number(v), j);
                 i = j;
@@ -220,17 +234,28 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 i += 1;
             }
             '{' => {
+                braces += 1;
                 push(&mut out, Tok::LBrace, i + 1);
                 i += 1;
             }
             '}' => {
+                braces = braces.saturating_sub(1);
                 push(&mut out, Tok::RBrace, i + 1);
                 i += 1;
             }
-            ',' => {
+            c if in_array && c == r.array_col => {
                 push(&mut out, Tok::Comma, i + 1);
                 i += 1;
             }
+            c if in_array && c == r.array_row => {
+                push(&mut out, Tok::Semicolon, i + 1);
+                i += 1;
+            }
+            c if !in_array && c == r.list => {
+                push(&mut out, Tok::Comma, i + 1);
+                i += 1;
+            }
+            // A list or row separator that does not belong to this dialect: the parser rejects it.
             ';' => {
                 push(&mut out, Tok::Semicolon, i + 1);
                 i += 1;
@@ -266,9 +291,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 push(&mut out, Tok::Op(op), i + len);
                 i += len;
             }
-            c if is_word_char(c) => {
+            c if word(c) => {
                 let mut j = i;
-                while ch(j).is_some_and(is_word_char) {
+                while ch(j).is_some_and(word) {
                     j += 1;
                 }
                 let w: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -278,13 +303,13 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 } else if ch(j) == Some(':') && {
                     // Sheet1:Sheet3!A1 — look ahead for word then '!'
                     let mut k = j + 1;
-                    while ch(k).is_some_and(is_word_char) {
+                    while ch(k).is_some_and(word) {
                         k += 1;
                     }
                     k > j + 1 && ch(k) == Some('!')
                 } {
                     let mut k = j + 1;
-                    while ch(k).is_some_and(is_word_char) {
+                    while ch(k).is_some_and(word) {
                         k += 1;
                     }
                     let w2: String = chars.get(j + 1..k).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -293,11 +318,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 } else if ch(j) == Some('(') {
                     push(&mut out, Tok::Func(w), j + 1);
                     i = j + 1;
-                } else if w.eq_ignore_ascii_case("TRUE") && ch(j) != Some('[') {
-                    push(&mut out, Tok::Bool(true), j);
-                    i = j;
-                } else if w.eq_ignore_ascii_case("FALSE") && ch(j) != Some('[') {
-                    push(&mut out, Tok::Bool(false), j);
+                } else if ch(j) != Some('[')
+                    && let Some(b) = d.names.parse_bool(&w)
+                {
+                    push(&mut out, Tok::Bool(b), j);
                     i = j;
                 } else {
                     push(&mut out, Tok::Word(w), j);

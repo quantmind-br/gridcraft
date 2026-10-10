@@ -39,5 +39,31 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
+## Language and regional format
+
+The interface language, the formula language and the regional format are session preferences. Formulas, number
+formats and `input` params are **canonical** (English function names, `,` between arguments, `.` as decimal point;
+this is also what XLSX files, the journal and `engine.journal` hold); the `…Local` variants carry the text as a user of
+the current language types and sees it.
+
+| Command | Params | Result |
+|---|---|---|
+| `app.setLocale` | `{uiLanguage?, formulaLanguage?, regionalFormat?, useSystemSeparators?, decimalSeparator?, thousandsSeparator?}` | The `app.getInternational` payload after the change. `uiLanguage` and `regionalFormat` are `"system"` or a tag (`pt-BR`); `formulaLanguage` is `"followUi"` or `"en-US"`; the separators are one character and apply when `useSystemSeparators` is false. Applies at once: every open workbook recalculates (automatic mode) or marks its cells pending (manual mode) and the UI reloads. No dialog, not undoable. Omitted params keep their value; an invalid value changes nothing. |
+| `app.getInternational` | | `{uiLanguage, formulaLanguage, regionalFormat}` (resolved tags), `decimal`, `thousands`, `list`, `arrayColumn`, `arrayRow`, `dateOrder`, `dateSeparator`, `timeSeparator`, `shortDate`, `longDate`, `r1c1: [row, column]`, `boolTrue`, `boolFalse`, `currency` and `prefs` (the six raw preferences). |
+| `app.languages` | | `{languages: [{tag, nativeName, functionsTranslated}], regions: [{tag, nativeName}]}`. `functionsTranslated` is false for languages that keep English function names (ja-JP, ko-KR, zh-CN, zh-TW). |
+
+Commands that take or return text a user types or sees:
+
+- `cell.set`, `range.fill`: `inputLocal` (typed text, e.g. `=SOMA(1,5;2)`, `1,5`, `10/10/2026`) instead of `input`; the
+  optional `locale` tag overrides the session language and region for that call.
+- `cell.get`, `document.inspect`, and the commands that list names, conditional formats and validations: `formula` and
+  `formulaLocal`, `numberFormat` and `numberFormatLocal`; the formula-taking commands accept the `…Local` params.
+- Number-format commands accept `numberFormatLocal` (`#.##0,00`, `dd/mm/aaaa`).
+- `formulas.functions`: each item has `name` (canonical) and `localName`.
+
+The desktop app detects the system language at every start; the choice made with `app.setLocale` is saved in
+`prefs.json` (`~/.config/gridcraft/` on Linux, `~/Library/Application Support/GridCraft/` on macOS, `%APPDATA%\GridCraft\`
+on Windows) and in the browser's `localStorage` (`gridcraft.prefs`) for the web build.
+
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).

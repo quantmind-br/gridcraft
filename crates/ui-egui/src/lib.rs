@@ -11,9 +11,13 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
+pub mod fnlist;
 pub mod formula_bar;
 pub mod grid;
 pub mod icons;
+pub mod keymap;
+pub mod l10n;
+pub mod options;
 pub mod panes;
 pub mod pivot_pane;
 pub mod ribbon;
@@ -22,9 +26,10 @@ pub mod theme;
 pub mod widgets;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use gridcraft_engine::core::{CellRef, RangeRef};
-use gridcraft_engine::{Session, UiRequest};
+use gridcraft_engine::{EngineError, Session, UiRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -75,6 +80,11 @@ pub struct Services {
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
     pub inbox: Option<Inbox>,
+    /// Web: start downloading the font file `fonts/<name>` (CJK text needs one); the bytes arrive
+    /// later in `font_inbox` under the same name.
+    pub fetch_font: Option<Box<dyn Fn(&str)>>,
+    /// Fonts delivered asynchronously (name, bytes), added to the font set on the next frame.
+    pub font_inbox: Option<Inbox>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -89,6 +99,8 @@ pub struct Perf {
 }
 
 pub struct SheetApp {
+    /// Interface texts for the active UI language (rebuilt on `UiRequest::LocaleChanged`).
+    pub l10n: l10n::Localizer,
     pub session: Session,
     pub ui: UiState,
     pub views: HashMap<(u64, usize), SheetView>,
@@ -104,6 +116,18 @@ pub struct SheetApp {
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
+    /// Shortcuts of the grid in the active language (rebuilt with `l10n`).
+    pub keymap: keymap::Keymap,
+    /// Font set in use (`FontNeeds::key`).
+    font_key: Option<theme::FontKey>,
+    /// A CJK character was seen in the interface language or a workbook: keep the CJK fonts.
+    cjk_seen: bool,
+    /// Document (uid, revision) already scanned for CJK text.
+    cjk_checked: Option<(u64, u64)>,
+    /// Fonts the host delivered (web).
+    font_downloads: Vec<(String, Arc<egui::FontData>)>,
+    /// Font file already requested from the host.
+    font_requested: Option<&'static str>,
     pub name_box: Option<String>,
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
@@ -113,7 +137,10 @@ pub struct SheetApp {
 
 impl SheetApp {
     pub fn new(session: Session, services: Services) -> SheetApp {
+        let l10n = l10n::Localizer::new(session.locale().ui.tag);
+        let keymap = keymap::Keymap::new(&l10n, l10n::platform_of(egui::os::OperatingSystem::default()));
         SheetApp {
+            l10n,
             session,
             ui: UiState::default(),
             views: HashMap::new(),
@@ -133,6 +160,12 @@ impl SheetApp {
             perf: Perf::default(),
             fonts_ready: false,
             fonts_set: false,
+            keymap,
+            font_key: None,
+            cjk_seen: false,
+            cjk_checked: None,
+            font_downloads: Vec::new(),
+            font_requested: None,
             name_box: None,
             shots: control::Shots::default(),
             selected_chart: None,
@@ -140,31 +173,104 @@ impl SheetApp {
         }
     }
 
-    /// One-time context setup: fonts and visuals.
+    /// One-time context setup: visuals and a default font set. [`SheetApp::logic`] replaces the
+    /// fonts with the set the interface language and the open workbooks need.
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        ctx.set_fonts(theme::font_definitions());
+        ctx.set_fonts(theme::font_definitions(&theme::FontNeeds::default()));
         theme::apply(ctx, dark);
     }
 
-    /// Runs an engine command (or a UI command) and handles UI requests it makes.
+    /// Runs an engine command (or a UI command) and handles UI requests it makes. Errors are the
+    /// engine's English text, which the control channel and tests read.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        self.run_typed(id, params).map_err(|e| e.to_string())
+    }
+
+    /// Like [`SheetApp::run`], with the structured error that [`SheetApp::alert`] translates.
+    pub fn run_typed(&mut self, id: &str, params: Json) -> Result<Json, EngineError> {
         if let Some(r) = self.run_ui_command(id, &params) {
-            return r;
+            return r.map_err(EngineError::Other);
         }
-        let r = self.session.run(id, params);
+        let r = self.session.execute(id, params);
         self.after_engine();
         r
     }
 
-    /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
+    /// Runs a command and shows its error (for menu/ribbon clicks): a command that is not
+    /// available right now is a toast, anything else a message box.
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
-        if let Err(e) = self.run(id, params) {
-            if e.contains("is not available right now") {
-                self.toast = Some((e, now_ms()));
-            } else {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
-            }
+        if let Err(e) = self.run_typed(id, params) {
+            self.alert(&e);
         }
+    }
+
+    /// Shows an engine error in the interface language.
+    pub fn alert(&mut self, e: &EngineError) {
+        let text = self.error_text(e);
+        if matches!(e, EngineError::Disabled(..)) {
+            self.toast = Some((text, now_ms()));
+        } else {
+            self.message = Some(("GridCraft".into(), text));
+        }
+    }
+
+    /// The message of an engine error in the interface language: the `error-<code>` message of the
+    /// language files, else the engine's English text. Invalid parameters show just the detail the
+    /// command reports.
+    pub fn error_text(&self, e: &EngineError) -> String {
+        if let EngineError::BadParams { msg, .. } = e {
+            return msg.clone();
+        }
+        let args = e.args();
+        let args: Vec<(&str, l10n::Arg)> = args.iter().map(|(k, v)| (*k, l10n::Arg::from(v))).collect();
+        match self.l10n.error(e.code(), &args) {
+            Some(text) => text.into_owned(),
+            None => clean_error(&e.to_string()),
+        }
+    }
+
+    /// Re-reads the session's locale after `UiRequest::LocaleChanged`: interface texts and shortcuts
+    /// (the fonts follow in `logic`).
+    pub fn rebuild_l10n(&mut self) {
+        let locale = self.session.locale();
+        self.l10n = l10n::Localizer::new(locale.ui.tag);
+        self.keymap = keymap::Keymap::new(&self.l10n, self.keymap.platform());
+        self.name_box = None;
+        // The AutoFilter list names its blanks row in the interface language.
+        self.grid.close_filter_menu();
+        // A cell being edited is rewritten in the new formula language and region.
+        if let Some(ed) = &mut self.editor {
+            ed.switch_locale(locale);
+        }
+    }
+
+    /// A canonical formula spelled in the formula language and region. Text that is not a complete
+    /// formula is returned unchanged.
+    pub fn local_formula(&self, canonical: &str) -> String {
+        gridcraft_engine::locale::to_local_formula(canonical, &self.session.locale().dialect())
+    }
+
+    /// `text` with its decimal point replaced by the region's decimal separator (for numbers that
+    /// Rust formatted, such as the width shown while dragging a column).
+    pub fn localize_decimal(&self, text: &str) -> String {
+        text.replace('.', self.session.locale().regional.decimal.encode_utf8(&mut [0u8; 4]))
+    }
+
+    /// How number fields show and read numbers in the session's region.
+    pub fn number_style(&self) -> widgets::NumberStyle {
+        let system = self.session.active().map_or(gridcraft_engine::core::DateSystem::D1900, |d| d.wb.date_system);
+        widgets::NumberStyle::new(self.session.locale().regional, system)
+    }
+
+    /// A number typed in the region's spelling (`1,5`, `1.000`, `10%`), or `None` when `text` is
+    /// not a number there.
+    pub fn parse_number(&self, text: &str) -> Option<f64> {
+        self.number_style().parse(text)
+    }
+
+    /// `n` spelled with the region's decimal separator.
+    pub fn number_text(&self, n: f64) -> String {
+        self.number_style().text(n)
     }
 
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
@@ -207,7 +313,11 @@ impl SheetApp {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
                 UiRequest::Message(m) => self.message = Some(("GridCraft".into(), m)),
-                UiRequest::EditCell(text) => self.begin_edit(text, false),
+                UiRequest::EditCell(text) => {
+                    // The engine sends the prefill already spelled in the formula language.
+                    self.begin_edit(text, false);
+                }
+                UiRequest::LocaleChanged => self.rebuild_l10n(),
                 UiRequest::OpenUrl(u) => {
                     if let Some(f) = &self.services.open_url {
                         f(&u);
@@ -215,6 +325,71 @@ impl SheetApp {
                 }
             }
         }
+    }
+
+    /// The fonts the interface language and the text of the open workbooks need. The Options
+    /// dialog lists every language by its native name, so opening it makes the CJK fonts
+    /// needed for good (they load once, not on every open and close).
+    pub fn font_needs(&mut self) -> theme::FontNeeds {
+        let tag = self.l10n.tag();
+        if self.dialog.as_ref().is_some_and(|d| d.name == "options") {
+            self.cjk_seen = true;
+        }
+        if !self.cjk_seen {
+            self.cjk_seen = self.scan_cjk();
+        }
+        theme::FontNeeds { language: tag.to_string(), cjk: self.cjk_seen || theme::is_cjk_language(tag), downloaded: self.font_downloads.clone() }
+    }
+
+    /// Whether the text being edited, or the active workbook (when it changed since the last scan),
+    /// has a character that needs a CJK font.
+    fn scan_cjk(&mut self) -> bool {
+        if self.editor.as_ref().is_some_and(|e| theme::has_cjk(&e.text)) {
+            return true;
+        }
+        let Some(d) = self.session.active() else { return false };
+        let stamp = (d.uid, d.revision);
+        if self.cjk_checked == Some(stamp) {
+            return false;
+        }
+        let found = d.wb.sheets.iter().any(|sh| {
+            theme::has_cjk(&sh.name)
+                || sh.cells.iter().take(200_000).any(|(_, c)| matches!(&c.value, gridcraft_engine::core::Value::Text(t) if theme::has_cjk(t)))
+        });
+        self.cjk_checked = Some(stamp);
+        found
+    }
+
+    /// Installs the font set when the needs changed (language, CJK text, a downloaded font arrived),
+    /// and asks the host for the CJK font file the web build loads on demand.
+    fn refresh_fonts(&mut self, ctx: &egui::Context) {
+        let arrived: Vec<(String, Vec<u8>)> = self
+            .services
+            .font_inbox
+            .as_ref()
+            .map(|i| std::mem::take(&mut *i.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
+            .unwrap_or_default();
+        for (name, bytes) in arrived {
+            self.font_downloads.push((name, Arc::new(egui::FontData::from_owned(bytes))));
+        }
+        let needs = self.font_needs();
+        if needs.cjk
+            && let Some(fetch) = &self.services.fetch_font
+        {
+            let file = theme::web_cjk_font(&needs.language);
+            if self.font_requested != Some(file) && !self.font_downloads.iter().any(|(n, _)| n == file) {
+                fetch(file);
+                self.font_requested = Some(file);
+            }
+        }
+        let key = needs.key();
+        if self.font_key.as_ref() == Some(&key) {
+            return;
+        }
+        ctx.set_fonts(theme::font_definitions(&needs));
+        self.font_key = Some(key);
+        self.fonts_set = true;
+        ctx.request_repaint();
     }
 
     pub fn open_dialog(&mut self, name: &str, params: Json) {
@@ -248,13 +423,13 @@ impl SheetApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
-        match self.session.run("file.open", json!({"path": path})) {
+        match self.run_typed("file.open", json!({"path": path})) {
             Ok(_) => {
                 self.ui.recent.retain(|p| p != path);
                 self.ui.recent.insert(0, path.to_string());
                 self.ui.recent.truncate(20);
             }
-            Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+            Err(e) => self.message = Some(("GridCraft".into(), self.error_text(&e))),
         }
         self.after_engine();
     }
@@ -272,19 +447,22 @@ impl SheetApp {
         Some(self.views.entry(k).or_default())
     }
 
-    /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
+    /// Starts editing the active cell. `text` (what was typed, in the formula language and region)
+    /// replaces the content or pre-fills it; without it the cell's input is shown in the formula
+    /// language.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        let loc = self.session.locale();
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = d.selection.active;
-        let current = sh.cell(at).map(|c| c.input_text()).unwrap_or_default();
+        let current = sh.cell(at).map(|c| gridcraft_engine::locale::input_local(c, &loc)).unwrap_or_default();
         let (text, replace) = match text {
             Some(t) => (t, true),
             None => (current.clone(), false),
         };
-        let mut ed = editor::EditState::new(d.wb.active_sheet, at, text, replace, from_formula_bar);
+        let mut ed = editor::EditState::new(d.wb.active_sheet, at, text, replace, from_formula_bar, loc);
         if replace && !ed.is_formula() {
-            ed.completion = editor::column_completion(sh, at, &ed.text);
+            ed.completion = editor::column_completion(sh, at, &ed.text, &ed.locale);
         }
         self.editor = Some(ed);
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
@@ -302,6 +480,8 @@ impl SheetApp {
         if let Some(d) = self.session.active()
             && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
         {
+            // Without a message of its own the rule says what the interface language says.
+            let msg = if dv.error_message.is_empty() { self.l10n.text("ui-validation-default-message", &[]).into_owned() } else { msg };
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
                 let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
                 self.message = Some((title, msg));
@@ -312,9 +492,9 @@ impl SheetApp {
             self.toast = Some((msg, now_ms()));
         }
         let r = if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+            self.session.execute("range.fill", json!({"inputLocal": text}))
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            self.session.execute("cell.set", json!({"cell": ed.cell.a1(), "inputLocal": text, "array": array}))
         };
         match r {
             Ok(_) => {
@@ -325,7 +505,7 @@ impl SheetApp {
                 true
             }
             Err(e) => {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.message = Some(("GridCraft".into(), self.error_text(&e)));
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
                 false
@@ -352,14 +532,21 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // The keyboard family can change after start-up (the web build learns it from the user agent).
+        let platform = l10n::platform(ctx);
+        if platform != self.keymap.platform() {
+            self.keymap = keymap::Keymap::new(&self.l10n, platform);
+        }
+        // The fonts follow the interface language and the text on screen. New fonts apply from the
+        // next frame on: the first set is applied before anything is painted.
+        let first = !self.fonts_set;
+        self.refresh_fonts(ctx);
         if !self.fonts_ready {
-            // New fonts apply from the next frame on: paint nothing until then.
-            if self.fonts_set {
-                self.fonts_ready = true;
-            } else {
-                SheetApp::setup_context(ctx, self.ui.dark);
-                self.fonts_set = true;
+            if first {
+                theme::apply(ctx, self.ui.dark);
                 ctx.request_repaint();
+            } else {
+                self.fonts_ready = true;
             }
         }
         if ctx.global_style().visuals.dark_mode != self.ui.dark {
@@ -375,8 +562,8 @@ impl SheetApp {
             .unwrap_or_default();
         for (name, bytes) in arrived {
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            if let Err(e) = self.session.run("file.open", json!({"name": name, "base64": b64})) {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
+            if let Err(e) = self.run_typed("file.open", json!({"name": name, "base64": b64})) {
+                self.message = Some(("GridCraft".into(), self.error_text(&e)));
             }
             self.after_engine();
         }
@@ -443,8 +630,10 @@ impl SheetApp {
             let _ = self.session.run("file.save", json!({}));
         }
         // Window title.
+        let l = self.l10n;
         if let Some(d) = self.session.active() {
-            let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+            let name = d.display_title();
+            let title = if d.is_dirty() { l.text("ui-window-title-edited", &[("title", l10n::Arg::from(name.as_str()))]).into_owned() } else { name };
             if self.grid.last_title.as_deref() != Some(title.as_str()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);
@@ -472,7 +661,9 @@ impl SheetApp {
             }
         }
         if self.grid.drag_select && !cur.is_single() {
-            return format!("{}R x {}C", cur.height(), cur.width());
+            // The size while dragging uses the formula language's R1C1 letters (pt-BR `5L x 3C`).
+            let [row, col] = self.session.locale().formula.r1c1;
+            return format!("{}{row} x {}{col}", cur.height(), cur.width());
         }
         sel.active.a1()
     }

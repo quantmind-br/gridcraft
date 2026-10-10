@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_numfmt::{Formatted, NumberFormat, format_value_in};
 
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
@@ -28,7 +28,7 @@ pub fn number_format(code: &str) -> NumberFormat {
 
 /// Formats a value with a format code.
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
-    format_value(v, &parsed(code), wb.date_system)
+    format_value_in(v, &parsed(code), wb.date_system, &wb.locale)
 }
 
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
@@ -37,7 +37,7 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
     {
-        return format!("={}", f.text);
+        return crate::locale::to_local_formula(&format!("={}", f.text), &wb.locale.dialect());
     }
     let style = wb.styles.get(sheet.style_id(c));
     let f = format(&v, style.num_fmt.as_str(), wb);

@@ -10,6 +10,7 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod intl;
 pub mod pivot;
 pub mod print;
 pub mod review;
@@ -98,6 +99,15 @@ macro_rules! cmd {
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
         $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
     };
+    // Undoable, but not journaled itself: it runs other commands, which are journaled with
+    // canonical params (replaying the call as well would repeat its effect).
+    (nested $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: true }
+    };
+    // A UI preference: neither undoable nor journaled (it is not a document edit).
+    (pref $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+    };
 }
 pub(crate) use cmd;
 
@@ -116,6 +126,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());
+        v.extend(intl::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(pivot::specs());

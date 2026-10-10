@@ -5,7 +5,42 @@ use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2,
 
 use crate::SheetApp;
 use crate::icons::{self, Icon};
+use crate::l10n::{Localizer, Tr};
 use crate::theme::{self, Tokens};
+
+/// How numbers are typed and shown in number fields: the region's decimal separator and the
+/// workbook's date system (for `10%`-style input). Copy, so a widget can own it.
+#[derive(Clone, Copy)]
+pub struct NumberStyle {
+    region: gridcraft_locale::Regional,
+    system: gridcraft_engine::core::DateSystem,
+}
+
+impl NumberStyle {
+    pub fn new(region: gridcraft_locale::Regional, system: gridcraft_engine::core::DateSystem) -> NumberStyle {
+        NumberStyle { region, system }
+    }
+
+    /// `n` spelled in the region (`1,5` in de-DE).
+    pub fn text(self, n: f64) -> String {
+        gridcraft_engine::core::number_to_text_in(n, &self.region)
+    }
+
+    /// A number typed in the region's spelling.
+    pub fn parse(self, text: &str) -> Option<f64> {
+        gridcraft_engine::core::parse::parse_number_text_in(text, self.system, &self.region)
+    }
+
+    /// A drag value that shows and reads numbers in the region's spelling.
+    pub fn drag<'a, N: egui::emath::Numeric>(self, value: &'a mut N) -> egui::DragValue<'a> {
+        egui::DragValue::new(value).custom_formatter(move |n, _| self.text(n)).custom_parser(move |s| self.parse(s))
+    }
+
+    /// A slider whose number box shows and reads numbers in the region's spelling.
+    pub fn slider<'a, N: egui::emath::Numeric>(self, value: &'a mut N, range: std::ops::RangeInclusive<N>) -> egui::Slider<'a> {
+        egui::Slider::new(value, range).custom_formatter(move |n, _| self.text(n)).custom_parser(move |s| self.parse(s))
+    }
+}
 
 /// A flat square icon button with hover highlight and tooltip.
 pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egui::Vec2) -> Response {
@@ -108,12 +143,12 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
 
 /// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
 /// `Some("none")` for No Fill/Automatic.
-pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+pub fn color_palette(ui: &mut Ui, l: Localizer, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
     let mut picked = None;
     if ui.button(none_label).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    ui.label(egui::RichText::new(&*l.tr("Theme Colors")).small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
     egui::Grid::new(ui.id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
@@ -136,7 +171,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
             ui.end_row();
         }
     });
-    ui.label(egui::RichText::new("Standard Colors").small());
+    ui.label(egui::RichText::new(&*l.tr("Standard Colors")).small());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for hex in ["#C00000", "#FF0000", "#FFC000", "#FFFF00", "#92D050", "#00B050", "#00B0F0", "#0070C0", "#002060", "#7030A0"] {
@@ -156,6 +191,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
+    let l = app.l10n;
     let mut close = false;
     egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
@@ -170,7 +206,8 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button(format!("  {}  ", l.tr("OK"))).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });
