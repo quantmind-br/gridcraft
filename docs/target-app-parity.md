@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **258 / 290 (89.0%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **259 / 290 (89.3%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **501 / 523 (95.8%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **492 / 523 (94.1%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (53.2 computed) |
@@ -55,8 +55,8 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **501**, all of them Excel names.
 - **Ribbon catalog:** `crates/engine/src/catalog.rs` (290 unique ids across 15 tabs) against the
-  313 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
-  identical to the committed `parity-checklist.md`. The catalog is our own transcription of
+  command ids registered in `crates/engine/src/cmd/*.rs` (313 when measured; 319 after M12, #191,
+  among them `file.options`), identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
   Header & Footer, Sparkline, Slicer, Timeline), the Developer and Help tabs and sub-menu items, so
   89% of it is roughly **60–65% of Excel's full command surface** (estimated).
@@ -333,7 +333,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-10 | minor | Localization re-measured for M12 (#191): 10% → 50%, 100–165 h → 45–65 h; full number 51.6 → 53.2 (still ~50%), full parity ~700–1,100 → ~650–1,000 h, full-target hours to ~95% ~650–1,050 → ~600–950 |
+| 2026-10-10 | minor | Localization re-measured for M12 (#191): 10% → 50%, 100–165 h → 45–65 h; full number 51.6 → 53.2 (still ~50%), full parity ~700–1,100 → ~650–1,000 h, full-target hours to ~95% ~650–1,050 → ~600–950; catalog 258 → 259 / 290 (`file.options`) |
 | 2026-10-10 | minor | Readiness-by-audience table: hours to ~95% for each of the three numbers (full 650–1,050, mainstream 200–310, essentials 60–100). Full number confirmed as the additive weighted sum over the written dimension weights (no change) |
 | 2026-10-10 | minor | Added Mainstream practitioner (~50%) and Essentials user (~63%) with written weights and discounts, and user-evidence counts; re-checked the full number after the 10-10 merges (charts 38→30, localization 5→10; still 51.6, ~50%) |
 | 2026-10-10 | minor | Stage checked against the new alpha gate (six core workflows, all pass): stays alpha |

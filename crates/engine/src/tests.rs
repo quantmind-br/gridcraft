@@ -1364,11 +1364,11 @@ fn find_and_replace_work_on_what_the_formula_bar_shows() {
 #[test]
 fn the_journal_is_canonical_and_skips_preferences() {
     let mut s = session_in(prefs("de-DE", "de-DE"));
-    s.execute("app.options", json!({})).unwrap();
+    s.execute("file.options", json!({})).unwrap();
     s.execute("cell.set", json!({"cell": "A1", "inputLocal": "=SUMME(1,5;2)"})).unwrap();
     s.execute("cell.set", json!({"cell": "A2", "inputLocal": "1,5"})).unwrap();
     s.execute("home.numberFormat", json!({"range": "A2", "numberFormatLocal": "#.##0,00"})).unwrap();
-    assert!(s.journal.iter().all(|(id, _)| id != "app.setLocale" && id != "app.options"));
+    assert!(s.journal.iter().all(|(id, _)| id != "app.setLocale" && id != "file.options"));
     let recorded: Vec<(String, serde_json::Value)> = s.journal.clone();
     let mut replay = self::s();
     for (id, p) in &recorded {

@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "app.getInternational", "International Settings", [], None, "{} → separators, date order, R1C1 letters, booleans, currency, the active languages and the system locale the \"system\" preferences resolve to (systemLocale, systemLanguage, systemRegion) (Application.International)", always, get_international),
         cmd!(query "app.languages", "Available Languages", [], None, "{} → {languages: [{tag, nativeName, functionsTranslated}], regions: [{tag, nativeName}]}", always, languages),
-        cmd!(pref "app.options", "Options…", ["File"], None, "{} (opens the Options dialog)", always, options),
+        cmd!(pref "file.options", "Options…", ["File"], None, "{} (opens the Options dialog)", always, options),
     ]
 }
 

@@ -102,7 +102,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     (msg!("Print…"), "file.print"),
                     (msg!("Sort A to Z"), "data.sortAscending"),
                     (msg!("Calculate Now"), "formulas.calculateNow"),
-                    (msg!("Options"), "app.options"),
+                    (msg!("Options"), "file.options"),
                 ] {
                     let text = l.command_label(id).unwrap_or_else(|| l.tr(label));
                     if ui.button(text).clicked() {

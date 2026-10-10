@@ -81,7 +81,7 @@ pub fn tree() -> Vec<Menu> {
                 SEP,
                 key("menu-file-properties", "file.properties", None),
                 SEP,
-                cmd("app.options", None),
+                cmd("file.options", None),
             ],
         ),
         menu(
