@@ -65,7 +65,19 @@ fn spill_operator() {
     assert!(parse("A1:B2#").is_err());
     assert!(parse("Name#").is_err());
     // Deleting the anchor's sheet leaves #REF!.
-    assert_eq!(print(&crate::adjust::delete_sheet(parse("SUM(Data!A1#)").unwrap(), "Data")), "SUM(#REF!)");
+    assert_eq!(print(&crate::adjust::delete_sheet(parse("SUM(Data!A1#)").unwrap(), "Data", &[])), "SUM(#REF!)");
+}
+
+#[test]
+fn delete_sheet_shrinks_3d_span() {
+    let order: Vec<String> = ["Sheet1", "Sheet2", "Sheet3", "Results"].iter().map(|s| s.to_string()).collect();
+    let del = |f: &str, n: &str| print(&crate::adjust::delete_sheet(parse(f).unwrap(), n, &order));
+    assert_eq!(del("SUM(Sheet1:Sheet3!A1)", "Sheet1"), "SUM(Sheet2:Sheet3!A1)");
+    assert_eq!(del("SUM(Sheet1:Sheet3!A1)", "Sheet3"), "SUM(Sheet1:Sheet2!A1)");
+    assert_eq!(del("SUM(Sheet3:Sheet1!A1)", "Sheet1"), "SUM(Sheet3:Sheet2!A1)");
+    assert_eq!(del("SUM(Sheet1:Sheet3!A1)", "Sheet2"), "SUM(Sheet1:Sheet3!A1)");
+    assert_eq!(del("SUM(Sheet1:Sheet2!A1)", "Sheet1"), "SUM(Sheet2!A1)");
+    assert_eq!(del("Sheet1!A1+Sheet3!A1", "Sheet1"), "#REF!+Sheet3!A1");
 }
 
 #[test]
@@ -161,6 +173,37 @@ fn moves_and_renames() {
     assert_eq!(print(&adjust(e, "S", "S", &mv)), "D10+E11+C3+SUM(D10:E11)");
     let e = parse("Old!A1+'Old'!B2").unwrap();
     assert_eq!(print(&rename_sheet(e, "Old", "New Name")), "'New Name'!A1+'New Name'!B2");
+}
+
+#[test]
+fn rename_sheet_updates_qualified_names() {
+    let e = parse("Data!MyName+MyName+Other!MyName").unwrap();
+    assert_eq!(print(&rename_sheet(e, "data", "Numbers")), "Numbers!MyName+MyName+Other!MyName");
+    let e = parse("Data!MyName").unwrap();
+    assert_eq!(print(&rename_sheet(e, "Data", "New Name")), "'New Name'!MyName");
+}
+
+#[test]
+fn moves_between_sheets() {
+    let mv = Edit::MoveToSheet { from: gridcraft_core::RangeRef::parse("A1:B2").unwrap(), to_sheet: "New Name".into(), to_row: 9, to_col: 3 };
+    for (host, input, expected) in [
+        ("Source", "A1+$B$2+C3+SUM(A1:B2)", "'New Name'!D10+'New Name'!$E$11+C3+SUM('New Name'!D10:E11)"),
+        ("Other", "A1+sOuRcE!$B2+Other!B2", "A1+'New Name'!$E11+Other!B2"),
+        ("Source", "SUM(A1:C3)+SUM(Source:Other!A1)", "SUM(A1:C3)+SUM(Source:Other!A1)"),
+    ] {
+        assert_eq!(print(&adjust(parse(input).unwrap(), host, "Source", &mv)), expected);
+    }
+    let edge = Edit::MoveToSheet {
+        from: gridcraft_core::RangeRef::parse("A1:B2").unwrap(),
+        to_sheet: "New Name".into(),
+        to_row: gridcraft_core::MAX_ROWS - 1,
+        to_col: 3,
+    };
+    assert_eq!(print(&adjust(parse("B2").unwrap(), "Source", "Source", &edge)), "#REF!");
+    for (from, input, row, col, expected) in [("A:A", "$A:$A", 0, 2, "Dest!$C:$C"), ("1:1", "$1:$1", 2, 0, "Dest!$3:$3")] {
+        let mv = Edit::MoveToSheet { from: gridcraft_core::RangeRef::parse(from).unwrap(), to_sheet: "Dest".into(), to_row: row, to_col: col };
+        assert_eq!(print(&adjust(parse(input).unwrap(), "Source", "Source", &mv)), expected);
+    }
 }
 
 #[test]

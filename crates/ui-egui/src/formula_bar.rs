@@ -7,7 +7,7 @@ use crate::SheetApp;
 use crate::editor::REF_COLORS;
 use crate::fnlist;
 use crate::icons::{self, Icon};
-use crate::l10n::Tr;
+use crate::l10n::{Arg, Tr};
 use crate::theme::{self, Tokens};
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
@@ -71,13 +71,19 @@ fn active_input(app: &SheetApp) -> String {
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
-        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+        return if picture.alt.is_empty() {
+            app.l10n.text("ui-formula-bar-picture-in-cell", &[]).into_owned()
+        } else {
+            app.l10n.text("ui-formula-bar-picture-alt", &[("alt", Arg::from(picture.alt.as_str()))]).into_owned()
+        };
     }
     if let Some(c) = sh.cell(a) {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
-        return gridcraft_engine::locale::input_local(c, &app.session.locale(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
+        let shown = gridcraft_engine::locale::input_local(c, &app.session.locale(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
+        // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
+        return if c.formula.as_ref().is_some_and(|f| f.array.is_some()) { format!("{{{shown}}}") } else { shown };
     }
     // A spilled cell shows the anchor's formula greyed out in Excel; we show it plainly.
     for (anchor, r) in &sh.spill_ranges {

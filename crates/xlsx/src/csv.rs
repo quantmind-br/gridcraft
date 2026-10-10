@@ -43,15 +43,17 @@ pub fn decode_text(bytes: &[u8]) -> String {
 }
 
 /// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first lines. En-US conventions; see [`sniff_delimiter_in`].
+/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line,
+/// otherwise comma wins. En-US conventions; see [`sniff_delimiter_in`].
 #[cfg(test)]
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
     sniff_delimiter_in(text, quote, &gridcraft_locale::INVARIANT.regional)
 }
 
 /// [`sniff_delimiter`] for a region: the region's list separator is the first candidate and the
-/// default, and where the decimal separator is a comma a comma is never chosen (it belongs to the
-/// numbers, so Excel splits such files on the list separator).
+/// default (it wins when no candidate appears on every line), and where the decimal separator is
+/// a comma a comma is never chosen (it belongs to the numbers, so Excel splits such files on the
+/// list separator).
 pub fn sniff_delimiter_in(text: &str, quote: char, reg: &gridcraft_locale::Regional) -> u8 {
     let mut candidates: Vec<char> = vec![reg.list];
     for d in [',', ';', '\t'] {
@@ -65,25 +67,35 @@ pub fn sniff_delimiter_in(text: &str, quote: char, reg: &gridcraft_locale::Regio
         let mut counts = vec![];
         let mut n = 0usize;
         let mut in_q = false;
+        let mut blank = true;
         for ch in text.chars().take(64 * 1024) {
+            if !in_q && ch == '\n' {
+                // Blank lines carry no delimiter evidence.
+                if !blank {
+                    counts.push(n);
+                }
+                n = 0;
+                blank = true;
+                if counts.len() >= 20 {
+                    break;
+                }
+                continue;
+            }
+            if ch != '\r' {
+                blank = false;
+            }
             if ch == quote {
                 in_q = !in_q;
             } else if !in_q && ch == d {
                 n += 1;
-            } else if !in_q && ch == '\n' {
-                counts.push(n);
-                n = 0;
-                if counts.len() >= 20 {
-                    break;
-                }
             }
         }
-        if n > 0 {
+        if !blank {
             counts.push(n);
         }
         let min = counts.iter().copied().min().unwrap_or(0);
         let total: usize = counts.iter().sum();
-        if (min, total) > (best.1, best.2) {
+        if min > 0 && (min, total) > (best.1, best.2) {
             best = (d as u8, min, total);
         }
     }

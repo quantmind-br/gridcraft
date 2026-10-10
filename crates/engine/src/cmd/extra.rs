@@ -683,21 +683,42 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
                 Some(existing.unwrap_or(TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None }))
             })
             .collect();
-        // New columns get the first default name no other column uses: structured references
-        // need unique names.
+        // Names must be unique (structured references need them): a repeated header keeps the
+        // first column and the repeat becomes a new one numbered as `insert.table` does (`Sales2`);
+        // new columns get the first default name nothing else uses. Sets keep thousands of
+        // equal headers from taking cubic time.
         let base = loc.ui.content("column");
-        for i in 0..cols.len() {
-            if cols.get(i).is_some_and(Option::is_some) {
-                continue;
-            }
-            let taken = |n: &str| cols.iter().flatten().any(|c| c.name.eq_ignore_ascii_case(n));
-            let name = (i + 1..).map(|k| format!("{base}{k}")).find(|n| !taken(n)).unwrap_or_default();
-            if let Some(slot) = cols.get_mut(i) {
-                *slot = Some(TableColumn { name, totals: TotalsFn::None, totals_label: None, formula: None });
-            }
+        let mut all: std::collections::HashSet<String> = cols.iter().flatten().map(|c| c.name.to_ascii_lowercase()).collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut next_suffix: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (i, slot) in cols.iter_mut().enumerate() {
+            let fresh = match slot {
+                Some(c) if seen.insert(c.name.to_ascii_lowercase()) => continue,
+                Some(c) => {
+                    let k = next_suffix.entry(c.name.to_ascii_lowercase()).or_insert(2);
+                    let mut n = format!("{}{k}", c.name);
+                    while all.contains(&n.to_ascii_lowercase()) {
+                        *k += 1;
+                        n = format!("{}{k}", c.name);
+                    }
+                    *k += 1;
+                    n
+                }
+                None => (i + 1..).map(|k| format!("{base}{k}")).find(|n| !all.contains(&n.to_ascii_lowercase())).unwrap_or_default(),
+            };
+            all.insert(fresh.to_ascii_lowercase());
+            seen.insert(fresh.to_ascii_lowercase());
+            *slot = Some(TableColumn { name: fresh, totals: TotalsFn::None, totals_label: None, formula: None });
         }
         t.columns = cols.into_iter().flatten().collect();
         t.range = r;
+        let names: Vec<String> = t.columns.iter().map(|c| c.name.clone()).collect();
+        // Header cells show their column's name, so a blank or repeated header is filled in.
+        for (i, (name, shown)) in names.iter().zip(&headers).enumerate() {
+            if name != shown {
+                sheet.set_value(CellRef::new(r.start.row, r.start.col + i as u32), Value::text(name.as_str()));
+            }
+        }
         cx.structural = true;
         Ok(Json::Null)
     })

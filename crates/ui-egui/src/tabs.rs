@@ -9,6 +9,12 @@ use crate::icons::{self, Icon};
 use crate::l10n::{Arg, Tr, msg, tip};
 use crate::theme::{self, Tokens};
 
+/// The rename field asks for focus only while it has not got it yet. Asking again on the frame it lost focus (Enter or a click elsewhere)
+/// would keep the field focused after it is closed, so the keyboard stayed stuck in the sheet name.
+fn rename_needs_focus(has_focus: bool, lost_focus: bool) -> bool {
+    !has_focus && !lost_focus
+}
+
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let l = app.l10n;
@@ -63,7 +69,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(6.0, 5.0))));
                     let ed = child.add(egui::TextEdit::singleline(&mut text).font(theme::ui_font(13.0)).desired_width(r.width() - 12.0));
                     app.grid.rename_text = text.clone();
-                    ed.request_focus();
+                    if rename_needs_focus(ed.has_focus(), ed.lost_focus()) {
+                        ed.request_focus();
+                    }
                     if ed.lost_focus() {
                         if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && text != name {
                             app.run_or_alert("sheet.rename", json!({"sheet": i, "name": text}));
@@ -298,4 +306,16 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
             });
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rename_needs_focus;
+
+    #[test]
+    fn rename_field_takes_focus_once_and_lets_go_on_commit() {
+        assert!(rename_needs_focus(false, false), "first frame: grab focus");
+        assert!(!rename_needs_focus(true, false), "already focused: do not ask again");
+        assert!(!rename_needs_focus(false, true), "Enter or click-away: must not take focus back");
+    }
 }

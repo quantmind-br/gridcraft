@@ -112,7 +112,8 @@ fn data_range(s: &Session, p: &Json) -> Result<RangeRef> {
     }
     let sel = d.selection.current();
     if !sel.is_single() {
-        let used = sh.used_range().unwrap_or(sel);
+        // An empty sheet has no data to work on: just the active cell.
+        let Some(used) = sh.used_range() else { return Ok(RangeRef::cell(d.selection.active)) };
         return Ok(sel.intersection(&used).unwrap_or(sel));
     }
     Ok(current_region(sh, d.selection.active))
@@ -668,6 +669,9 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     let r = data_range(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    // Rows and columns past the data are blank: only the part with data is compared (whole
+    // columns compared a million blank rows and reported them as removed duplicates).
+    let r = sh.used_range().and_then(|u| r.intersection(&u)).unwrap_or(RangeRef::cell(r.start));
     let header = bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r));
     let cols: Vec<u32> = p
         .get("columns")
@@ -867,16 +871,42 @@ pub(crate) fn validation_formula(
     crate::locale::from_local_body(local.trim_start_matches('='), &loc.dialect(), known).map(Some)
 }
 
+/// `r` minus `cut`, as up to four non-overlapping rectangles.
+fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
+    let Some(i) = r.intersection(cut) else { return vec![r] };
+    let mut out = Vec::new();
+    if i.start.row > r.start.row {
+        out.push(RangeRef::new(r.start, CellRef::new(i.start.row - 1, r.end.col)));
+    }
+    if i.end.row < r.end.row {
+        out.push(RangeRef::new(CellRef::new(i.end.row + 1, r.start.col), r.end));
+    }
+    if i.start.col > r.start.col {
+        out.push(RangeRef::new(CellRef::new(i.start.row, r.start.col), CellRef::new(i.end.row, i.start.col - 1)));
+    }
+    if i.end.col < r.end.col {
+        out.push(RangeRef::new(CellRef::new(i.start.row, i.end.col + 1), CellRef::new(i.end.row, r.end.col)));
+    }
+    out
+}
+
+/// Removes the cells of `cuts` from every validation, keeping the rest of each rule's ranges.
+fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
+    for dv in validations.iter_mut() {
+        for cut in cuts {
+            dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
+        }
+    }
+    validations.retain(|d| !d.ranges.is_empty());
+}
+
 fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;
     if bool_param(p, "clear").unwrap_or(false) {
         return edit(s, |cx| {
             let sh = cx.sheet_mut(sheet)?;
-            for dv in sh.validations.iter_mut() {
-                dv.ranges.retain(|r| !ranges.iter().any(|x| x.contains_range(r)));
-            }
-            sh.validations.retain(|d| !d.ranges.is_empty());
+            remove_validation_cells(&mut sh.validations, &ranges);
             Ok(Json::Null)
         });
     }
@@ -923,10 +953,7 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
-        for v in sh.validations.iter_mut() {
-            v.ranges.retain(|r| !ranges.iter().any(|x| x.contains_range(r)));
-        }
-        sh.validations.retain(|d| !d.ranges.is_empty());
+        remove_validation_cells(&mut sh.validations, &ranges);
         sh.validations.push(dv.clone());
         Ok(Json::Null)
     })
@@ -1197,6 +1224,28 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_validation_edits_keep_the_rest_of_the_old_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let rule = |range: &str, lo: &str, hi: &str| json!({"range": range, "type": "whole", "operator": "between", "formula1": lo, "formula2": hi});
+        let ok = |s: &mut Session, cell: &str, input: &str| {
+            s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true)
+        };
+        s.execute("data.validation", rule("B1:B3", "1", "10")).unwrap();
+        s.execute("data.validation", json!({"range": "B2", "clear": true})).unwrap();
+        assert!(ok(&mut s, "B2", "999"));
+        assert!(!ok(&mut s, "B1", "999"));
+        assert!(!ok(&mut s, "B3", "999"));
+        s.execute("data.validation", rule("B2:B4", "100", "200")).unwrap();
+        for cell in ["B2", "B3", "B4"] {
+            assert!(ok(&mut s, cell, "150"), "{cell}");
+            assert!(!ok(&mut s, cell, "5"), "{cell}");
+        }
+        assert!(ok(&mut s, "B1", "5"));
+        assert!(!ok(&mut s, "B1", "150"));
+    }
 
     #[test]
     fn split() {

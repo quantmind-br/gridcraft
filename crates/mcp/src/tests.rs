@@ -456,3 +456,14 @@ fn schemas_describe_the_local_arguments() {
         assert!(props(tool).get(arg).is_some(), "{tool} has no `{arg}`");
     }
 }
+
+#[test]
+fn file_commands_without_a_file_fail() {
+    let mut s = server();
+    // `file.save` on Book1, which has no file yet, would ask for one too.
+    for command in ["file.open", "file.saveAs", "file.save", "data.getData", "data.fromTextCsv"] {
+        let msg = fails(&mut s, "execute_command", json!({"command": command}));
+        assert!(msg.contains("missing") && msg.contains("never open dialogs"), "{command}: {msg}");
+        fails(&mut s, "execute_command", json!({"command": command, "params": {}}));
+    }
+}

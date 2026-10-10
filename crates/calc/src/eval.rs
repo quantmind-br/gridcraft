@@ -14,6 +14,10 @@ use gridcraft_model::Workbook;
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
+/// References up to this many cells are read at their full size; larger ones (`A:A`, ranges
+/// reserved for data to come such as `$A$2:$A$50000`) stop at the sheet's used range, so that
+/// formulas over them stay fast.
+const FULL_SIZE_CELLS: u64 = 16_384;
 const MAX_DEPTH: usize = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -142,7 +146,10 @@ impl<'h> Evaluator<'h> {
         if a.range.is_single() {
             return self.host.cell_value(a.sheet, a.range.start);
         }
-        let range = self.trim(a);
+        // A reference keeps its size, so the array has its shape and its blanks count
+        // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
+        let cells = u64::from(a.range.height()) * u64::from(a.range.width());
+        let range = if cells > FULL_SIZE_CELLS { self.trim(a) } else { a.range };
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
@@ -1455,6 +1462,20 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
         }
         Expr::Name(_) | Expr::Struct(_) => dynamic = true,
         Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !gridcraft_functions::is_special(n) => dynamic = true,
+        // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
+        // the references inside it, not only those references.
+        Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
+            let mut inner = precedents(wb, sheet, a).0;
+            inner.extend(precedents(wb, sheet, b).0);
+            let mut boxes: Vec<Area> = Vec::new();
+            for area in inner {
+                match boxes.iter_mut().find(|x| x.sheet == area.sheet) {
+                    Some(x) => x.range = x.range.union(&area.range),
+                    None => boxes.push(area),
+                }
+            }
+            out.extend(boxes);
+        }
         _ => {}
     });
     (out, dynamic)

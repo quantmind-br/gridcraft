@@ -100,7 +100,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
-    for (a, r) in &dynamic {
+    // Values inside spills and legacy array ranges.
+    for (a, r) in sheet.spill_ranges.iter().filter(|(_, r)| !r.is_single()) {
         for c in r.iter().take(1_000_000) {
             if c != *a
                 && let Some(v) = sheet.spill.get(&c)
@@ -470,9 +471,23 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         for ch in &sheet.charts {
             out.charts += 1;
-            let name = format!("xl/charts/chart{}.xml", out.charts);
-            out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch).into_bytes());
-            let rid = drels.add("chart", &format!("../charts/chart{}.xml", out.charts));
+            let rid = if crate::chartex::is_chartex(ch.kind) {
+                let n = out.charts;
+                let xml = crate::chartex::write_chartex(wb, si, ch, &mut out.chart_names);
+                out.part(&format!("xl/charts/chartEx{n}.xml"), Some(crate::chartex::CT_CHARTEX), xml.into_bytes());
+                // Excel expects a chartex part's style and colour parts.
+                out.part(&format!("xl/charts/style{n}.xml"), Some(crate::chartex::CT_STYLE), crate::chartex::style_xml().into_bytes());
+                out.part(&format!("xl/charts/colors{n}.xml"), Some(crate::chartex::CT_COLORS), crate::chartex::colors_xml().into_bytes());
+                let mut crels = Rels::default();
+                crels.add_uri(crate::chartex::REL_STYLE, &format!("style{n}.xml"));
+                crels.add_uri(crate::chartex::REL_COLORS, &format!("colors{n}.xml"));
+                out.part(&format!("xl/charts/_rels/chartEx{n}.xml.rels"), None, crels.xml().into_bytes());
+                drels.add_uri(crate::chartex::REL_CHARTEX, &format!("../charts/chartEx{n}.xml"))
+            } else {
+                let name = format!("xl/charts/chart{}.xml", out.charts);
+                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch).into_bytes());
+                drels.add("chart", &format!("../charts/chart{}.xml", out.charts))
+            };
             objs.push(Obj::Chart(ch, rid));
         }
         for sh in &sheet.shapes {

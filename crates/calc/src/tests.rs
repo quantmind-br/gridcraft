@@ -156,6 +156,72 @@ fn operators() {
 }
 
 #[test]
+fn blocked_spill_reads_as_spill_error() {
+    // Calculated in the same pass, a formula over a blocked spill read the array that couldn't
+    // spill.
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    for a in ["A1", "B1", "C1", "A2", "C2", "A3", "B3", "C3"] {
+        s.cells.set(c(a), Cell::value(Value::Number(1.0)));
+    }
+    s.cells.set(c("B2"), Cell::formula(Formula::new("=SEQUENCE(2,2,9)")));
+    s.cells.set(c("E1"), Cell::formula(Formula::new("=SUM(A1:C3)")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("B2"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("E1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("C3"), 1.0);
+}
+
+#[test]
+fn blocked_spill_read_through_offset() {
+    // The reader's reference is only known while evaluating, so it isn't in the dependency graph.
+    let mut t = T::new();
+    t.set("E4", "5");
+    t.set("E8", "=SUM(OFFSET(E2,0,0,2,2))");
+    t.set("E3", "=SEQUENCE(2,2,3)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("E3"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("E8"), Value::Error(CellError::Spill));
+}
+
+#[test]
+fn spill_into_the_old_area_of_a_blocked_neighbour() {
+    // C7's array becomes blocked by C8, whose array then takes over C7's old area.
+    let mut t = T::new();
+    t.set("C7", "=SEQUENCE(2,2)");
+    t.set("C8", "=SEQUENCE(2,2)");
+    assert_eq!(t.get("C7"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C8"), t.num("D8"), t.num("C9"), t.num("D9")], [1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn arrays_do_not_spill_in_tables() {
+    // Excel: spilled array formulas aren't supported in tables.
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().tables.push(gridcraft_model::Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse("B3:C6").unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![],
+        style: String::new(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+    });
+    t.set("C4", "=SEQUENCE(2)");
+    t.set("E1", "=SEQUENCE(4)");
+    t.set("H1", "=SUM(C4:C5)");
+    assert_eq!(t.get("C4"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("C5"), Value::Empty);
+    assert_eq!(t.get("H1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("E4"), 4.0);
+}
+
+#[test]
 fn ifs_and_lazy() {
     let mut t = T::new();
     t.set("A1", "5");
@@ -209,6 +275,40 @@ fn spills() {
 }
 
 #[test]
+fn references_keep_their_size_past_the_used_range() {
+    let mut t = T::new();
+    t.set("A1", "5");
+    t.set("A2", "6");
+    t.set("C1", "=ROWS(A1:A10*1)");
+    t.set("C2", "=SUMPRODUCT(--(A1:A10=\"\"))");
+    t.set("C3", "=COUNTBLANK(A1:A10)");
+    t.set("C4", "=COUNTIF(A1:A10,\"\")");
+    t.set("C5", "=COLUMNS(TRANSPOSE(A1:A10))");
+    for (at, want) in [("C1", 10.0), ("C2", 8.0), ("C3", 8.0), ("C4", 8.0), ("C5", 10.0)] {
+        assert_eq!(t.num(at), want, "{at}");
+    }
+    // Whole columns are still read up to the used range.
+    t.set("D1", "=ROWS(FILTER(A:A,A:A<>\"\"))");
+    assert_eq!(t.num("D1"), 2.0);
+}
+
+#[test]
+fn spilled_blank_cells_show_zero() {
+    let mut t = T::new();
+    t.set("A1", "5");
+    t.set("A3", "7");
+    t.set("C1", "=A1:A4");
+    assert_eq!(t.get("C2"), Value::Number(0.0));
+    assert_eq!(t.get("C4"), Value::Number(0.0));
+    t.set("D1", "=COUNT(C1:C4)");
+    assert_eq!(t.num("D1"), 4.0);
+    t.set("E1", "=A2:A3");
+    assert_eq!(t.get("E1"), Value::Number(0.0));
+    t.set("F1", "=SORT(A1:A3)");
+    assert_eq!(t.get("F3"), Value::Number(0.0));
+}
+
+#[test]
 fn let_lambda() {
     let mut t = T::new();
     t.set("A1", "=LET(x,2,y,3,x*y)");
@@ -233,6 +333,33 @@ fn names_and_sheets() {
     t.wb.sheet_mut(1).unwrap().set_value(c("A1"), Value::Number(10.0));
     t.calc.cells_changed(&mut t.wb, &[(1, c("A1"))]);
     assert_eq!(t.num("A1"), 5.0);
+}
+
+#[test]
+fn legacy_array_formulas_fill_their_range() {
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "2");
+    let cse = |t: &mut T, at: &str, formula: &str, range: &str| {
+        let mut f = Formula::new(formula);
+        f.array = gridcraft_core::RangeRef::parse(range);
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(f));
+        t.calc.cells_changed(&mut t.wb, &[(0, c(at))]);
+    };
+    // Past the result: #N/A. A single column repeats across the range.
+    cse(&mut t, "C1", "=A1:A2*2", "C1:D3");
+    cse(&mut t, "F1", "=A1:A2*2", "F1");
+    cse(&mut t, "G1", "=5", "G1:G2");
+    assert_eq!(t.num("C2"), 4.0);
+    assert_eq!(t.num("D2"), 4.0);
+    assert_eq!(t.get("C3"), Value::Error(CellError::NA));
+    // A smaller range shows only part of the result and never spills.
+    assert_eq!(t.num("F1"), 2.0);
+    assert_eq!(t.get("F2"), Value::Empty);
+    assert_eq!(t.num("G2"), 5.0);
+    // A range too large to fill is an error, not an allocation of every cell.
+    cse(&mut t, "H1", "=1", "H1:XFD1048576");
+    assert_eq!(t.get("H1"), Value::Error(CellError::Num));
 }
 
 #[test]

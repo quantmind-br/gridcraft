@@ -765,6 +765,32 @@ fn sheet_operations_keep_names_on_their_sheets() {
 }
 
 #[test]
+fn deleting_a_3d_span_end_sheet_keeps_the_rest() {
+    let book = || {
+        let mut s = s();
+        for name in ["Sheet2", "Sheet3", "Results"] {
+            s.execute("home.insertSheet", json!({"name": name})).unwrap();
+        }
+        for (sheet, n) in [("Sheet1", 3), ("Sheet2", 5), ("Sheet3", 7)] {
+            s.execute("sheet.activate", json!({"sheet": sheet})).unwrap();
+            s.execute("cell.set", json!({"cell": "A1", "input": n.to_string()})).unwrap();
+        }
+        s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "=SUM(Sheet1:Sheet3!A1)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "=Sheet1!A1"})).unwrap();
+        s
+    };
+    let gone = Value::Error(gridcraft_core::CellError::Ref);
+    for (deleted, total, direct) in [("Sheet1", 12.0, gone), ("Sheet3", 8.0, Value::Number(3.0)), ("Sheet2", 10.0, Value::Number(3.0))] {
+        let mut s = book();
+        s.execute("home.deleteSheet", json!({"sheet": deleted})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(total), "deleting {deleted}");
+        assert_eq!(v(&s, "B1"), direct, "deleting {deleted}");
+    }
+}
+
+#[test]
 fn xlsx_roundtrip_through_engine() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["a", 1], ["b", 2]]})).unwrap();
@@ -920,6 +946,83 @@ fn xlsb_fixture() -> Vec<u8> {
 }
 
 #[test]
+fn replacing_a_spilling_formula_clears_its_spill() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A1:A3)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    assert_eq!((v(&s, "A2"), v(&s, "A3"), v(&s, "B1")), (Value::Empty, Value::Empty, Value::Number(2.0)));
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("edit.clearContents", json!({"range": "A1"})).unwrap();
+    assert_eq!((v(&s, "A2"), v(&s, "B1")), (Value::Empty, Value::Number(0.0)));
+}
+
+#[test]
+fn range_ending_in_index_recalculates() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B6", "input": "=SUM(C3:INDEX(B9:C11,2,2))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C5", "input": "2"})).unwrap();
+    assert_eq!(v(&s, "B6"), Value::Number(2.0));
+}
+
+#[test]
+fn structural_edits_move_spills_with_their_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A5", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    let col = |s: &Session| (4..=7).map(|r| v(s, &format!("A{r}"))).collect::<Vec<_>>();
+    assert_eq!(col(&s), [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0), Value::Empty]);
+    s.execute("home.deleteRows", json!({"rows": "4:4"})).unwrap();
+    assert_eq!(col(&s), [Value::Empty, Value::Empty, Value::Empty, Value::Empty]);
+}
+
+#[test]
+fn clearing_a_distant_blocker_unblocks_the_spill() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(100)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A90", "input": "x"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Spill));
+    s.execute("edit.clearContents", json!({"range": "A90"})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "A100")), (Value::Number(1.0), Value::Number(100.0)));
+}
+
+#[test]
+fn a_spill_that_goes_away_unblocks_another() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,3)"})).unwrap();
+    assert_eq!(v(&s, "E10"), Value::Error(gridcraft_core::CellError::Spill));
+    // Blocking F8's array frees F10 for E10's.
+    s.execute("cell.set", json!({"cell": "F9", "input": "0"})).unwrap();
+    assert_eq!(v(&s, "F8"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!((v(&s, "E10"), v(&s, "G10")), (Value::Number(1.0), Value::Number(3.0)));
+}
+
+#[test]
+fn an_array_reading_another_arrays_spill_is_updated() {
+    // G5 is evaluated before D11 in the same pass, so it first reads D11's old spill.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D11", "input": "=SEQUENCE(1,3,A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G5", "input": "=UNIQUE(VSTACK(F9:F12,A1))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    assert_eq!((v(&s, "G6"), v(&s, "G7")), (Value::Number(12.0), Value::Number(10.0)));
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!((v(&s, "G6"), v(&s, "G7")), (Value::Number(12.0), Value::Number(10.0)));
+}
+
+#[test]
+fn indirect_reads_a_spill_laid_out_in_the_same_pass() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "F5", "input": "=SEQUENCE(2,2,7)"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E5", "input": "=INDIRECT(\"F7\")"})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(9.0));
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(9.0));
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
@@ -931,6 +1034,79 @@ fn every_command_survives_empty_params() {
         let _ = s.execute(spec.id, json!([1, 2]));
         let _ = s.execute(spec.id, json!({"range": "ZZZ999999999", "cell": "", "sheet": 99}));
     }
+}
+
+fn reopen(s: &mut Session) {
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let b64 = r["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+}
+
+fn chart_data(s: &mut Session) {
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["", "Open", "High", "Low", "Close"], ["Mon", 10, 14, 9, 12], ["Tue", 12, 15, 11, 14], ["Wed", 14, 16, 10, 11], ["Thu", 11, 13, 8, 9], ["Fri", 9, 12, 7, 11], ["Sat", 11, 15, 10, 14]]}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn every_chart_kind_survives_xlsx() {
+    use gridcraft_model::ChartKind;
+    let kinds = [
+        ("combo", ChartKind::Combo),
+        ("stock", ChartKind::Stock),
+        ("histogram", ChartKind::Histogram),
+        ("boxWhisker", ChartKind::BoxWhisker),
+        ("waterfall", ChartKind::Waterfall),
+        ("funnel", ChartKind::Funnel),
+        ("treemap", ChartKind::Treemap),
+        ("sunburst", ChartKind::Sunburst),
+        ("column", ChartKind::ColumnClustered),
+        ("line", ChartKind::Line),
+        ("scatter", ChartKind::Scatter),
+    ];
+    for (t, kind) in kinds {
+        let mut s = s();
+        chart_data(&mut s);
+        s.execute("insert.chart", json!({"type": t, "range": "A1:E7", "title": "Week"})).unwrap();
+        let before = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+        assert_eq!(before.kind, kind);
+        reopen(&mut s);
+        assert!(s.doc().unwrap().wb.names.is_empty(), "{t}");
+        let after = &s.doc().unwrap().wb.active().unwrap().charts[0];
+        assert_eq!(after.kind, kind, "{t}");
+        assert_eq!(after.title.as_deref(), Some("Week"), "{t}");
+        assert_eq!(after.series.len(), before.series.len(), "{t}");
+        for (a, b) in after.series.iter().zip(&before.series) {
+            assert_eq!((&a.name, &a.values, &a.color), (&b.name, &b.values, &b.color), "{t}");
+            // A histogram bins its values; it has no categories in the file.
+            if kind != ChartKind::Histogram {
+                assert_eq!(a.categories, b.categories, "{t}");
+            }
+        }
+    }
+}
+
+#[test]
+fn whole_sheet_selection_stays_within_the_data() {
+    // On an empty sheet with everything selected these filled or scanned every cell of the
+    // sheet, running out of memory or time.
+    let mut s = s();
+    s.execute("edit.selectAll", json!({})).unwrap();
+    for cmd in ["edit.fillDown", "edit.fillRight", "edit.fillUp", "edit.fillLeft", "data.removeDuplicates"] {
+        s.execute(cmd, json!({})).unwrap();
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4], [5, 6]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:XFD1048576"})).unwrap();
+    s.execute("edit.fillUp", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(5.0));
+    assert!(s.execute("edit.fillDown", json!({"range": "A1:Z1000000"})).is_err(), "too large to fill");
+    assert!(s.execute("edit.autoFill", json!({"source": "A1:XFD1048576", "target": "A1"})).is_err(), "too large to fill");
+    s.execute("range.setValues", json!({"range": "D1", "values": [[1], [1], [2]]})).unwrap();
+    let r = s.execute("data.removeDuplicates", json!({"range": "D:D", "header": false})).unwrap();
+    assert_eq!((r["removed"].clone(), r["remaining"].clone()), (json!(1), json!(2)));
+    assert!(s.execute("data.removeDuplicates", json!({"range": "A1:XFD1048576", "header": false})).is_ok());
 }
 
 #[test]
@@ -1374,14 +1550,15 @@ fn table_resize_keeps_columns_across_a_language_switch() {
 
 #[test]
 fn table_resize_never_repeats_a_column_name() {
-    // Blank header cells keep the column at their position; new columns skip every kept or typed
-    // name, wherever it sits (structured references need unique names).
+    // New columns skip every kept or typed name, wherever it sits, and a repeated header is
+    // numbered (structured references need unique names). Header cells show the names.
     for (table, typed, resized, expect) in [
         ("A1:B2", [].as_slice(), "B1:C2", ["Column2", "Column3"].as_slice()),
         ("B1:C2", [].as_slice(), "A1:C2", ["Column3", "Column1", "Column2"].as_slice()),
-        // A cleared header keeps its column, unless a header typed elsewhere takes its name.
+        // A cleared header is refilled with its column's default name at once, as in Excel.
         ("A1:B2", [("A1", ""), ("B1", "")].as_slice(), "A1:C2", ["Column1", "Column2", "Column3"].as_slice()),
-        ("A1:B2", [("A1", ""), ("C1", "Column1")].as_slice(), "A1:C2", ["Column3", "Column2", "Column1"].as_slice()),
+        ("A1:B2", [("A1", ""), ("C1", "Column1")].as_slice(), "A1:C2", ["Column1", "Column2", "Column12"].as_slice()),
+        ("A1:B2", [("C1", "x"), ("D1", "X")].as_slice(), "A1:D2", ["Column1", "Column2", "x", "X2"].as_slice()),
     ] {
         let mut s = s();
         s.execute("insert.table", json!({"range": table, "header": true})).unwrap();
@@ -1391,6 +1568,9 @@ fn table_resize_never_repeats_a_column_name() {
         s.execute("table.resize", json!({"table": "Table1", "range": resized})).unwrap();
         let names: Vec<String> = s.doc().unwrap().wb.sheets[0].tables[0].columns.iter().map(|c| c.name.clone()).collect();
         assert_eq!(names, expect, "{table} -> {resized}");
+        let r = gridcraft_core::RangeRef::parse(resized).unwrap();
+        let shown: Vec<String> = (r.start.col..=r.end.col).map(|c| v(&s, &CellRef::new(0, c).a1()).display()).collect();
+        assert_eq!(shown, expect, "header cells of {table} -> {resized}");
     }
 }
 
@@ -2188,4 +2368,71 @@ fn cell_picture_cut_uses_live_source_after_edit() {
             assert_eq!(v(&s, "D2"), Value::Error(gridcraft_core::CellError::Value));
         }
     }
+}
+
+fn ymd(y: i64, m: i64, d: i64) -> Value {
+    Value::Number(gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, y, m, d).unwrap())
+}
+
+fn series_date(seed: &str, range: &str, unit: &str) -> Session {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": seed})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": range, "direction": "columns", "type": "date", "dateUnit": unit})).unwrap();
+    s
+}
+
+#[test]
+fn fill_series_month_clamps_to_month_end() {
+    let s = series_date("2026-01-31", "A1:A4", "month");
+    assert_eq!(v(&s, "A1"), ymd(2026, 1, 31));
+    assert_eq!(v(&s, "A2"), ymd(2026, 2, 28));
+    assert_eq!(v(&s, "A3"), ymd(2026, 3, 31));
+    assert_eq!(v(&s, "A4"), ymd(2026, 4, 30));
+    // Mid-month seeds are untouched.
+    let s = series_date("2026-01-15", "A1:A4", "month");
+    assert_eq!(v(&s, "A4"), ymd(2026, 4, 15));
+}
+
+#[test]
+fn fill_series_month_leap_year() {
+    let s = series_date("2028-01-31", "A1:A3", "month");
+    assert_eq!(v(&s, "A2"), ymd(2028, 2, 29));
+    assert_eq!(v(&s, "A3"), ymd(2028, 3, 31));
+    let s = series_date("1996-01-31", "A1:A3", "month");
+    assert_eq!(v(&s, "A2"), ymd(1996, 2, 29));
+}
+
+#[test]
+fn fill_series_year_clamps_leap_day() {
+    let s = series_date("2028-02-29", "A1:A5", "year");
+    assert_eq!(v(&s, "A2"), ymd(2029, 2, 28));
+    assert_eq!(v(&s, "A5"), ymd(2032, 2, 29));
+}
+
+#[test]
+fn autofill_month_pattern_clamps_to_month_end() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["2026-01-31"], ["2026-03-31"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:A2", "target": "A1:A6"})).unwrap();
+    assert_eq!(v(&s, "A3"), ymd(2026, 5, 31));
+    assert_eq!(v(&s, "A4"), ymd(2026, 7, 31));
+    assert_eq!(v(&s, "A5"), ymd(2026, 9, 30));
+    assert_eq!(v(&s, "A6"), ymd(2026, 11, 30));
+}
+
+#[test]
+fn notes_comments_and_links_survive_a_json_save() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "note", "author": "Example"})).unwrap();
+    s.execute("review.newComment", json!({"cell": "B2", "text": "comment", "author": "Example"})).unwrap();
+    s.execute("insert.link", json!({"cell": "C3", "target": "Sheet1!A1", "tooltip": "jump"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let bytes = crate::io::save_bytes(wb, "book.json").unwrap();
+    let (back, _) = crate::io::open_bytes("book.json", &bytes, &gridcraft_locale::INVARIANT).unwrap();
+    let (before, after) = (wb.active().unwrap(), back.active().unwrap());
+    assert_eq!((before.comments.len(), before.hyperlinks.len()), (2, 1));
+    assert_eq!(after.comments, before.comments);
+    assert_eq!(after.hyperlinks, before.hyperlinks);
+    assert_eq!(after.cells, before.cells);
 }
