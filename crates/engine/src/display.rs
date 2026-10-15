@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use gridcraft_core::{CellRef, RangeRef, Value};
+use gridcraft_core::{CellRef, RangeRef, Region, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_numfmt::{Formatted, NumberFormat, format_value_in};
 
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
@@ -30,7 +30,12 @@ pub fn number_format(code: &str) -> NumberFormat {
 
 /// Formats a value with a format code.
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
-    format_value(v, &parsed(code), wb.date_system)
+    format_in(v, code, wb, wb.region)
+}
+
+/// [`format`] in an explicit region instead of the workbook's.
+pub fn format_in(v: &Value, code: &str, wb: &Workbook, region: &Region) -> Formatted {
+    format_value_in(v, &parsed(code), wb.date_system, region)
 }
 
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
@@ -82,20 +87,31 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    cell_text_in(wb, sheet, c, wb.region)
+}
+
+/// [`cell_text`] in an explicit region.
+pub fn cell_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, region: &Region) -> String {
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
         && !formula_hidden(wb, sheet, c)
     {
         return format!("={}", f.text);
     }
-    value_text(wb, sheet, c)
+    value_text_in(wb, sheet, c, region)
 }
 
 /// A cell's value with its number format applied, independent of column width: no `#####`
 /// and no General narrowing (Save As CSV/Text writes this). Formulas give their result.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    value_text_in(wb, sheet, c, wb.region)
+}
+
+/// [`value_text`] in an explicit region. Files use the en-US one: CSV is read back with en-US
+/// rules, so a region's separators must not reach it.
+pub fn value_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, region: &Region) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    let f = format(&sheet.value(c), style.num_fmt.as_str(), wb);
+    let f = format_in(&sheet.value(c), style.num_fmt.as_str(), wb, region);
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;
@@ -110,6 +126,12 @@ pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 
 /// Tab-separated text of a range, as the system clipboard gets it.
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
+    range_text_in(wb, sheet, r, wb.region)
+}
+
+/// [`range_text`] in an explicit region. Text that goes back through the invariant CSV reader
+/// (Get Data from a range) uses en-US.
+pub fn range_text_in(wb: &Workbook, sheet: usize, r: RangeRef, region: &Region) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
     let mut out = String::new();
     let r = clipboard_range(r);
@@ -123,7 +145,7 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
                 out.push('\t');
             }
             first = false;
-            let t = cell_text(wb, sh, CellRef::new(row, col));
+            let t = cell_text_in(wb, sh, CellRef::new(row, col), region);
             if t.contains(['\t', '\n', '"']) {
                 out.push('"');
                 out.push_str(&t.replace('"', "\"\""));
