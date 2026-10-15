@@ -8,7 +8,7 @@ formulas.
 | Interface | Function names (e.g.) | Local names | Booleans | Errors (e.g.) | Arguments / decimal | Array columns / rows | Table specifiers (e.g.) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | English | `SUM`, `IF`, `VLOOKUP` | — | `TRUE`, `FALSE` | `#VALUE!`, `#N/A` | `,` / `.` | `,` / `;` | `#Headers`, `#This Row` |
-| Español | `SUMA`, `SI`, `BUSCARV` | 10 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
+| Español | `SUMA`, `SI`, `BUSCARV` | 434 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
 
 The Spanish function names:
 

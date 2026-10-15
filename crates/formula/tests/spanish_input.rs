@@ -98,3 +98,19 @@ fn spanish_display_round_trips_text_containing_separators() {
     assert_eq!(shown, r#"SI(A1="a,b;c";CONCAT("1.5";",";";");SUMA(0,25;A1:A3 B2))"#);
     assert_eq!(print(&parse_input(&shown, es, |_| false).unwrap()), print(&expr));
 }
+
+#[test]
+fn full_spanish_table() {
+    let full = |src: &str| print(&parse_input(src, FormulaLocale::Es, |_| false).unwrap());
+    assert!(FormulaLocale::Es.translations().len() > 350);
+    assert_eq!(full("CONTAR.SI.CONJUNTO(A1:A3;\">1\")"), "COUNTIFS(A1:A3,\">1\")");
+    assert_eq!(full("SI.ERROR(1/0;#¡VALOR!)"), "IFERROR(1/0,#VALUE!)");
+    // A local name that is another function's English name means the local function, as in
+    // Spanish Excel: DECIMAL is FIXED there, and the base conversion is CONV.DECIMAL.
+    assert_eq!(full("DECIMAL(1,5;1)"), "FIXED(1.5,1)");
+    assert_eq!(full("CONV.DECIMAL(\"FF\";16)"), "DECIMAL(\"FF\",16)");
+    assert_eq!(
+        print_input(&parse("IFERROR(FIXED(1.5,1),DECIMAL(\"FF\",16))").unwrap(), FormulaLocale::Es, |_| false).unwrap(),
+        "SI.ERROR(DECIMAL(1,5;1);CONV.DECIMAL(\"FF\";16))"
+    );
+}
