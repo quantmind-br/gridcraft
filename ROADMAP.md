@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-15 | Formulas in Russian: 471 local function names, `ИСТИНА`/`ЛОЖЬ`, Russian errors and table specifiers, `;` arguments, `;` array columns and `:` array rows |
 | 2026-10-15 | Formula dialects: a formula language is one data table (names, booleans, errors, table specifiers, separators) read by the lexer, parser and printer; Spanish now also spells errors (`#¡VALOR!`) and table specifiers (`[#Encabezados]`), and local names may use any script |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
