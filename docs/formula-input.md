@@ -9,6 +9,7 @@ formulas.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | English | `SUM`, `IF`, `VLOOKUP` | — | `TRUE`, `FALSE` | `#VALUE!`, `#N/A` | `,` / `.` | `,` / `;` | `#Headers`, `#This Row` |
 | Español | `SUMA`, `SI`, `BUSCARV` | 10 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
+| Português (Brasil) | `SOMA`, `SE`, `PROCV` | 420 | `VERDADEIRO`, `FALSO` | `#VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Cabeçalhos`, `#Esta Linha` |
 
 The Spanish function names:
 

@@ -114,7 +114,8 @@ impl Language {
         use gridcraft_engine::formula::FormulaLocale;
         match self {
             Self::Es => FormulaLocale::Es,
-            Self::En | Self::Zh | Self::Ja | Self::Ko | Self::De | Self::Fr | Self::PtBr | Self::Ru | Self::Cs | Self::Sr => FormulaLocale::En,
+            Self::PtBr => FormulaLocale::PtBr,
+            Self::En | Self::Zh | Self::Ja | Self::Ko | Self::De | Self::Fr | Self::Ru | Self::Cs | Self::Sr => FormulaLocale::En,
         }
     }
 
