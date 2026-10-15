@@ -187,6 +187,17 @@ fn portuguese_interface_retains_its_canonical_formula_fallback() {
 }
 
 #[test]
+fn german_interface_enters_and_shows_german_formulas() {
+    let mut app = app();
+    app.run("app.language.set", json!({"code": "de"})).unwrap();
+    assert!(enter(&mut app, "=WENN(WAHR;SUMME({1.2;3,5.4});#NV)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM({1,2;3.5,4}),#N/A)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(10.5));
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=WENN(WAHR;SUMME({1.2;3,5.4});#NV)");
+}
+
+#[test]
 fn czech_interface_retains_its_canonical_formula_fallback() {
     // The Czech table translates interface labels only: formulas keep canonical English names,
     // `,` separators and `.` decimals until a Czech formula locale exists.
