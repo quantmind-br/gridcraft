@@ -380,6 +380,32 @@ static CS_CZ: Region = Region {
     currency_format_int: "#,##0 \"Kč\"",
 };
 
+static SR_RS: Region = Region {
+    tag: "sr-Latn-RS",
+    name: "Srpski (Srbija)",
+    lcid: 0x241A,
+    decimal: ',',
+    group: '.',
+    grouping: Grouping::Thousands,
+    date_order: DateOrder::Dmy,
+    date_sep: '.',
+    time_sep: ':',
+    short_date: "dd.mm.yyyy.",
+    long_date: "dddd, d. mmmm yyyy.",
+    short_time: "hh:mm",
+    long_time: "hh:mm:ss",
+    datetime: "dd.mm.yyyy. hh:mm",
+    months: ["januar", "februar", "mart", "april", "maj", "jun", "jul", "avgust", "septembar", "oktobar", "novembar", "decembar"],
+    months_abbr: ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "avg", "sep", "okt", "nov", "dec"],
+    months_genitive: None,
+    weekdays: ["nedelja", "ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota"],
+    weekdays_abbr: ["ned", "pon", "uto", "sre", "čet", "pet", "sub"],
+    am_pm: AM_PM,
+    currency: "RSD",
+    currency_format: "#,##0.00 \"RSD\"",
+    currency_format_int: "#,##0 \"RSD\"",
+};
+
 static JA_JP: Region = Region {
     tag: "ja-JP",
     name: "日本語 (日本)",
@@ -484,7 +510,8 @@ static ZH_TW: Region = Region {
     currency_format_int: "\"NT$\"#,##0",
 };
 
-static ALL: [&Region; 15] = [&EN_US, &EN_GB, &EN_IN, &ES_ES, &DE_DE, &FR_FR, &IT_IT, &PT_BR, &PT_PT, &RU_RU, &CS_CZ, &JA_JP, &KO_KR, &ZH_CN, &ZH_TW];
+static ALL: [&Region; 16] =
+    [&EN_US, &EN_GB, &EN_IN, &ES_ES, &DE_DE, &FR_FR, &IT_IT, &PT_BR, &PT_PT, &RU_RU, &CS_CZ, &SR_RS, &JA_JP, &KO_KR, &ZH_CN, &ZH_TW];
 
 /// Every region, English (United States) first.
 pub fn all() -> &'static [&'static Region] {
@@ -549,6 +576,7 @@ pub fn lookup(tag: &str) -> &'static Region {
         "it" => "it-IT",
         "ru" => "ru-RU",
         "cs" => "cs-CZ",
+        "sr" => "sr-Latn-RS",
         "ja" => "ja-JP",
         "ko" => "ko-KR",
         _ => "en-US",
@@ -636,6 +664,14 @@ mod tests {
         assert_eq!(lookup("zh-HK").tag, "zh-TW");
         assert_eq!(lookup("zh").tag, "zh-CN");
         assert_eq!(lookup("cs_CZ.UTF-8").tag, "cs-CZ");
+        assert_eq!(lookup("sr").tag, "sr-Latn-RS");
+        assert_eq!(lookup("sr-RS").tag, "sr-Latn-RS");
+        assert_eq!(lookup("sr_RS.UTF-8").tag, "sr-Latn-RS");
+        // The `@latin` modifier is stripped before matching (like `.UTF-8`), so Cyrillic glibc
+        // and BCP 47 tags also land here while there is no separate Cyrillic region.
+        assert_eq!(lookup("sr_RS@latin").tag, "sr-Latn-RS");
+        assert_eq!(lookup("sr-Cyrl-RS").tag, "sr-Latn-RS");
+        assert_eq!(find("sr-Latn-RS").map(|r| r.tag), Some("sr-Latn-RS"));
         assert_eq!(lookup("C").tag, "en-US");
         assert_eq!(lookup("").tag, "en-US");
         assert_eq!(lookup("xx-YY").tag, "en-US");
@@ -669,6 +705,10 @@ mod tests {
         let ru = find("ru-RU").unwrap();
         assert_eq!(ru.month_from_name("сентября"), Some(9));
         assert_eq!(ru.month_from_name("сент."), Some(9));
+        let sr = find("sr-Latn-RS").unwrap();
+        assert_eq!(sr.month_from_name("septembar"), Some(9));
+        assert_eq!(sr.month_from_name("Septembar"), Some(9));
+        assert_eq!(sr.month_from_name("sep"), Some(9));
         assert_eq!(EN_US.month_from_name("Ma"), None);
         assert_eq!(EN_US.month_from_name("May"), Some(5));
     }
