@@ -42,16 +42,25 @@ pub fn format_in(v: &Value, code: &str, wb: &Workbook, region: &Region) -> Forma
 /// constant number in a date or time format is shown as a date (as the grid shows it), not as its
 /// serial. When the formatted text would not read back as the same date (for example
 /// `dddd, mmmm d`), an ISO `yyyy-mm-dd` (with `hh:mm:ss` for a time of day; just `hh:mm:ss`
-/// for a time alone) is used instead, and if even that would not read back, the serial.
+/// for a time alone) is used instead, and if even that would not read back, the serial. Constant
+/// numbers use the workbook region's decimal separator, and dates are read back with its date order.
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
     let Value::Number(n) = &cell.value else { return raw };
     let code = wb.styles.get(cell.style).num_fmt.as_str();
-    if cell.formula.is_some() || !parsed(code).is_date() {
+    if cell.formula.is_some() {
         return raw;
     }
-    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
+    // A constant number reads back as typed in the region: with its decimal separator. Every
+    // fallback below returns this, never the canonical text, which the region would misread
+    // (de-DE reads `-1.234` as -1234).
+    let raw = if wb.region.decimal == '.' { raw } else { raw.replacen('.', &wb.region.decimal.to_string(), 1) };
+    if !parsed(code).is_date() {
+        return raw;
+    }
+    let reads_back =
+        |s: &str| matches!(gridcraft_core::parse::parse_input_in(s, wb.date_system, wb.region).value, Value::Number(m) if (m - n).abs() < 1e-9);
     let shown = format(&cell.value, code, wb).text;
     if reads_back(&shown) {
         return shown;
