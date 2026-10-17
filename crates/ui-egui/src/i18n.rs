@@ -116,7 +116,8 @@ impl Language {
             Self::Es => FormulaLocale::Es,
             Self::De => FormulaLocale::De,
             Self::PtBr => FormulaLocale::PtBr,
-            Self::En | Self::Zh | Self::Ja | Self::Ko | Self::Fr | Self::Ru | Self::Cs | Self::Sr => FormulaLocale::En,
+            Self::Ru => FormulaLocale::Ru,
+            Self::En | Self::Zh | Self::Ja | Self::Ko | Self::Fr | Self::Cs | Self::Sr => FormulaLocale::En,
         }
     }
 
