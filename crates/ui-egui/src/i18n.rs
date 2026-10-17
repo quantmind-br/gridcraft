@@ -115,7 +115,8 @@ impl Language {
         match self {
             Self::Es => FormulaLocale::Es,
             Self::De => FormulaLocale::De,
-            Self::En | Self::Zh | Self::Ja | Self::Ko | Self::Fr | Self::PtBr | Self::Ru | Self::Cs | Self::Sr => FormulaLocale::En,
+            Self::PtBr => FormulaLocale::PtBr,
+            Self::En | Self::Zh | Self::Ja | Self::Ko | Self::Fr | Self::Ru | Self::Cs | Self::Sr => FormulaLocale::En,
         }
     }
 

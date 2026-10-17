@@ -10,6 +10,7 @@ formulas.
 | English | `SUM`, `IF`, `VLOOKUP` | — | `TRUE`, `FALSE` | `#VALUE!`, `#N/A` | `,` / `.` | `,` / `;` | `#Headers`, `#This Row` |
 | Español | `SUMA`, `SI`, `BUSCARV` | 434 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
 | Deutsch | `SUMME`, `WENN`, `SVERWEIS` | 413 | `WAHR`, `FALSCH` | `#WERT!`, `#NV` | `;` / `,` | `.` / `;` | `#Kopfzeilen`, `#Diese Zeile` |
+| Português (Brasil) | `SOMA`, `SE`, `PROCV` | 420 | `VERDADEIRO`, `FALSO` | `#VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Cabeçalhos`, `#Esta Linha` |
 
 The Spanish function names:
 

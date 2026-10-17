@@ -134,6 +134,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 |---|---|
 | 2026-10-15 | Formulas in Spanish: the full table of 434 local function names (was 10), each from two sources; a local name that is another function's English name means the local function, as in Spanish Excel (`DECIMAL` is `FIXED`) |
 | 2026-10-15 | Formulas in German: 413 local function names, `WAHR`/`FALSCH`, German errors and table specifiers, `;` arguments and `.` array columns |
+| 2026-10-15 | Formulas in Brazilian Portuguese: 420 local function names, `VERDADEIRO`/`FALSO`, Portuguese errors and table specifiers, `;` arguments and `\` array columns (`REGEXTEST`/`REGEXREPLACE` stay English, as in Brazilian Excel) |
 | 2026-10-15 | Formula dialects: a formula language is one data table (names, booleans, errors, table specifiers, separators) read by the lexer, parser and printer; Spanish now also spells errors (`#¡VALOR!`) and table specifiers (`[#Encabezados]`), and local names may use any script |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
