@@ -1,7 +1,16 @@
 //! UI formula syntax boundary. Engine commands, control/API callers and XLSX keep English.
+//!
+//! Like Excel, the words of a formula (function names, booleans, errors, table specifiers) follow
+//! the interface language and its separators follow the regional format.
 use crate::i18n::Language;
-use gridcraft_engine::formula::{self, FormulaLocale, ParseError};
+use gridcraft_engine::formula::{self, FormulaLocale, ParseError, Separators};
 use gridcraft_engine::model::Workbook;
+
+/// The separators formulas are typed and shown with: the language's array separators, the
+/// workbook region's list and decimal separators.
+pub(crate) fn separators(locale: FormulaLocale, wb: &Workbook) -> Separators {
+    Separators::new(locale, wb.region)
+}
 
 pub(crate) fn canonical(
     text: &str,
@@ -19,7 +28,11 @@ pub(crate) fn canonical(
     {
         return Ok(stored);
     }
-    if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
+    // The separators of the region the edit started in, like the constants below.
+    let separators = Separators::new(locale, region);
+    if (locale == FormulaLocale::En && separators == Separators::EN_US)
+        || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@")
+    {
         return Ok(text.to_string());
     }
     // The engine's own formula detection (no trimming: " =1" is text), which also lets a number
@@ -29,33 +42,34 @@ pub(crate) fn canonical(
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
         let mut body = body.to_string();
-        let mut expr = formula::parse_input(&body, locale, known);
+        let mut expr = formula::parse_input(&body, locale, separators, known);
         for _ in 0..8 {
             if expr.is_ok() {
                 break;
             }
             body.push(')');
-            expr = formula::parse_input(&body, locale, known);
+            expr = formula::parse_input(&body, locale, separators, known);
         }
         return Ok(format!("={}", formula::print(&expr?)));
     }
     // Typed constants (numbers, dates, text) pass through: the engine reads them in the workbook's
-    // region (Options › Regional format), which is independent of the formula language.
+    // region (Options › Regional format), like the formula separators.
     Ok(text.to_string())
 }
 
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
-    // English (and every language without a formula table) shows the stored text, `_xludf.`
-    // prefixes aside, and skips a parse per frame.
-    if locale == FormulaLocale::En {
-        return hide_udf_prefix(text, locale);
+    let separators = separators(locale, wb);
+    // English words with canonical separators show the stored text, `_xludf.` prefixes aside,
+    // and skip a parse per frame.
+    if locale == FormulaLocale::En && separators == Separators::EN_US {
+        return hide_udf_prefix(text, locale, separators);
     }
     let Some(body) = text.strip_prefix('=') else { return text.to_string() };
     let shown = formula::parse(body)
-        .and_then(|expr| formula::print_input(&expr, locale, |name| wb.name(name, sheet).is_some() || wb.table(name).is_some()))
+        .and_then(|expr| formula::print_input(&expr, locale, separators, |name| wb.name(name, sheet).is_some() || wb.table(name).is_some()))
         .map(|body| format!("={body}"))
         .unwrap_or_else(|_| text.to_string());
-    hide_udf_prefix(&shown, locale)
+    hide_udf_prefix(&shown, locale, separators)
 }
 
 const UDF_PREFIX: &str = "_xludf.";
@@ -66,9 +80,9 @@ fn has_udf_prefix(text: &str) -> bool {
 
 /// Excel shows a user-defined call such as `_xludf.EOMONTH()` as `=EOMONTH()`. Only function
 /// names lose the prefix: text literals and names keep it.
-fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
+fn hide_udf_prefix(text: &str, locale: FormulaLocale, separators: Separators) -> String {
     let Some(body) = text.strip_prefix('=').filter(|b| has_udf_prefix(b)) else { return text.to_string() };
-    let Ok(tokens) = formula::lexer::tokenize_locale(body, locale) else { return text.to_string() };
+    let Ok(tokens) = formula::lexer::tokenize_locale(body, locale, separators) else { return text.to_string() };
     let mut out = String::from("=");
     let mut from = 0;
     for t in tokens {
@@ -83,12 +97,13 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out
 }
 
-/// A function's argument hint. The name and separators follow the formula syntax; the argument
-/// names follow the interface language, all of them or none, so a hint never mixes two languages.
-pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+/// A function's argument hint. The name follows the formula language and the separator the
+/// region; the argument names follow the interface language, all of them or none, so a hint never
+/// mixes two languages.
+pub(crate) fn signature(name: &str, locale: FormulaLocale, separators: Separators, language: Language) -> Option<String> {
     let english = crate::formula_bar::function_signature(locale.canonical_name(name))?;
     let Some((head, args)) = split_signature(&english) else { return Some(english) };
-    let separator = format!("{} ", locale.list_separator());
+    let separator = format!("{} ", separators.list);
     let args = match args.iter().map(|arg| translate_argument(arg, language)).collect::<Option<Vec<_>>>() {
         Some(translated) => translated.join(&separator),
         None => args.join(&separator),
@@ -156,8 +171,10 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
 mod tests {
     use super::*;
 
+    /// The hint in the region where the formula language is spoken (Spanish in es-ES).
     fn sig(name: &str, locale: FormulaLocale, language: Language) -> String {
-        signature(name, locale, language).unwrap_or_default()
+        let region = gridcraft_engine::core::region::lookup(if locale == FormulaLocale::Es { "es-ES" } else { "en-US" });
+        signature(name, locale, Separators::new(locale, region), language).unwrap_or_default()
     }
 
     #[test]
@@ -182,5 +199,9 @@ mod tests {
         assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+        // The separator is the region's: Spanish words in en-US, English words in es-ES.
+        let in_region = |locale, tag| Separators::new(locale, gridcraft_engine::core::region::lookup(tag));
+        assert_eq!(signature("SUMA", Es, in_region(Es, "en-US"), Language::Es).as_deref(), Some("SUMA(número1, [número2], ...)"));
+        assert_eq!(signature("SUM", En, in_region(En, "es-ES"), Language::En).as_deref(), Some("SUM(number1; [number2]; ...)"));
     }
 }

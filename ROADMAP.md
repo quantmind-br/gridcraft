@@ -93,9 +93,13 @@ The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Po
 and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
 added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas are en-US (plus Spanish). Numbers, dates
-and times follow a Regional format setting (15 regions; File › Options, `app.region`).
-Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
+(#38). Dialogs, menus and messages are English. Formulas follow the interface language in
+Spanish, German, Brazilian Portuguese, Russian and French (function names, booleans, errors and
+table specifiers at the editor; files keep English: [formula-input.md](docs/formula-input.md));
+numbers, dates, times and formula separators follow a Regional format setting (15 regions;
+File › Options, `app.region`).
+PR #163 (German formulas and numbers) is open. Detail:
+[localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
 |---|---|---|---|
@@ -141,6 +145,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | Formula dialects: a formula language is one data table (names, booleans, errors, table specifiers, separators) read by the lexer, parser and printer; Spanish now also spells errors (`#¡VALOR!`) and table specifiers (`[#Encabezados]`), and local names may use any script |
 | 2026-10-15 | Function help in Brazilian Portuguese: every description and argument name (479 and 283) |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
+| 2026-10-14 | Formula separators follow the Regional format, as in Excel, not the interface language: `=SUM(1;2)` with English names in de-DE, `=SOMME(1,2)` with French names in en-US; array separators keep the language's own, with `\` between columns where that would be the region's decimal |
 | 2026-10-13 | Spills: when two dynamic arrays want the same cells, the one already spilling there keeps them after Calculate Now and after saving and reopening, as when the second was entered (#964, found by the command-sequence fuzz) |
 | 2026-10-13 | `formulas.evaluate` (`gridcraft-cli eval`, MCP `evaluate_formula`) refuses what entering the formula in a cell refuses, with the reason (`=SUM(1;2)`: "expected `,` or `)`"), instead of `#NAME?` for any formula that doesn't parse |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |

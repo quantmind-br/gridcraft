@@ -111,7 +111,7 @@ impl Language {
     }
 
     /// The formula language this interface language enters and shows. Japanese, Chinese and
-    /// Korean Excel use English function names; the others have no formula table yet.
+    /// Korean Excel use English function names; Czech and Serbian have no function table yet.
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
         use gridcraft_engine::formula::FormulaLocale;
         match self {

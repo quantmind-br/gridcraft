@@ -1,13 +1,17 @@
-//! Russian formulas: entry and display syntax.
+//! Russian formulas: entry and display syntax, with the separators of a Russian region.
 use gridcraft_formula::FormulaLocale::{self, Ru};
-use gridcraft_formula::{parse, parse_input, print, print_input};
+use gridcraft_formula::{Separators, parse, parse_input, print, print_input};
+
+fn ru_ru() -> Separators {
+    Separators::new(Ru, gridcraft_core::region::lookup("ru-RU"))
+}
 
 fn canonical(src: &str, locale: FormulaLocale) -> String {
-    print(&parse_input(src, locale, |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
+    print(&parse_input(src, locale, ru_ru(), |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
 }
 
 fn shown(canonical: &str, locale: FormulaLocale) -> String {
-    print_input(&parse(canonical).unwrap(), locale, |_| false).unwrap()
+    print_input(&parse(canonical).unwrap(), locale, ru_ru(), |_| false).unwrap()
 }
 
 #[test]
@@ -29,11 +33,11 @@ fn any_letter_case_colon_array_rows_and_local_bindings() {
     // `:` separates array rows, so a number before it inside braces is not a row range.
     assert_eq!(canonical("{истина:ложь}+СУММ({1:2})+СУММ(1:3)", Ru), "{TRUE;FALSE}+SUM({1;2})+SUM(1:3)");
     // `,` is the decimal separator.
-    assert!(parse_input("SUM(1,2)", Ru, |_| false).is_ok_and(|e| print(&e) == "SUM(1.2)"));
+    assert!(parse_input("SUM(1,2)", Ru, ru_ru(), |_| false).is_ok_and(|e| print(&e) == "SUM(1.2)"));
     let known = |name: &str| name == "СУММ";
-    assert_eq!(print(&parse_input("СУММ(1)", Ru, known).unwrap()), "СУММ(1)");
-    assert_eq!(print_input(&parse("SUM(1)").unwrap(), Ru, known).unwrap(), "SUM(1)");
+    assert_eq!(print(&parse_input("СУММ(1)", Ru, ru_ru(), known).unwrap()), "СУММ(1)");
+    assert_eq!(print_input(&parse("SUM(1)").unwrap(), Ru, ru_ru(), known).unwrap(), "SUM(1)");
     for bad in ["{ИСТИНА:", "СУММ(1:"] {
-        assert!(parse_input(bad, Ru, |_| false).is_err(), "{bad}");
+        assert!(parse_input(bad, Ru, ru_ru(), |_| false).is_err(), "{bad}");
     }
 }

@@ -25,15 +25,15 @@ pub const MAX_FORMULA_LEN: usize = 8_192;
 /// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
 /// for `=`.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
-    parse_syntax(src, crate::FormulaLocale::En)
+    parse_syntax(src, crate::FormulaLocale::En, crate::Separators::EN_US)
 }
 
-pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
+pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale, separators: crate::Separators) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
         return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
     }
-    let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
+    let toks = tokenize_locale(body, locale, separators).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
     let mut p = Parser { toks, i: 0, depth: 0, locale };
     let e = p.expr(0, false)?;

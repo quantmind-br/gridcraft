@@ -1,13 +1,18 @@
-//! French formulas: entry and display syntax, checked against French Excel (#191, #443).
+//! French formulas: entry and display syntax, checked against French Excel (#191, #443), with the
+//! separators of a French region.
 use gridcraft_formula::FormulaLocale::{self, Fr};
-use gridcraft_formula::{parse, parse_input, print, print_input};
+use gridcraft_formula::{Separators, parse, parse_input, print, print_input};
+
+fn fr_fr() -> Separators {
+    Separators::new(Fr, gridcraft_core::region::lookup("fr-FR"))
+}
 
 fn canonical(src: &str, locale: FormulaLocale) -> String {
-    print(&parse_input(src, locale, |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
+    print(&parse_input(src, locale, fr_fr(), |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
 }
 
 fn shown(canonical: &str, locale: FormulaLocale) -> String {
-    print_input(&parse(canonical).unwrap(), locale, |_| false).unwrap()
+    print_input(&parse(canonical).unwrap(), locale, fr_fr(), |_| false).unwrap()
 }
 
 #[test]

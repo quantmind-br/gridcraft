@@ -1759,6 +1759,7 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
         r.request_focus();
     });
     let locale = language.formula_locale();
+    let separators = app.session.active().map(|doc| crate::formula_locale::separators(locale, &doc.wb)).unwrap_or_default();
     let list = gridcraft_engine::cmd::formulas::function_list();
     // The names and descriptions searched are the ones shown, so in the interface language. Unicode
     // lower case: local names and searches are not ASCII (`zählenwenn`, `сумм`).
@@ -1793,7 +1794,7 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     if let Some(f) = hits.get(d.list_index) {
         let name = f["name"].as_str().unwrap_or("");
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(name, locale, language).unwrap_or_default()).strong());
+        ui.label(egui::RichText::new(crate::formula_locale::signature(name, locale, separators, language).unwrap_or_default()).strong());
         ui.label(crate::formula_locale::description(name, locale, language).unwrap_or_default());
     }
     let mut open = true;
