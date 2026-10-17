@@ -139,6 +139,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | Formulas in Russian: 471 local function names, `ИСТИНА`/`ЛОЖЬ`, Russian errors and table specifiers, `;` arguments, `;` array columns and `:` array rows |
 | 2026-10-15 | Formulas in French: 405 local function names, `VRAI`/`FAUX`, French errors and table specifiers, `;` arguments and `.` array columns; separators, `TEXTE` codes and 38 names checked in French Excel 2013 and 2024 (#191, #443) |
 | 2026-10-15 | Formula dialects: a formula language is one data table (names, booleans, errors, table specifiers, separators) read by the lexer, parser and printer; Spanish now also spells errors (`#¡VALOR!`) and table specifiers (`[#Encabezados]`), and local names may use any script |
+| 2026-10-15 | Function help in Brazilian Portuguese: every description and argument name (479 and 283) |
+| 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
 | 2026-10-12 | Number formats: a fraction denominator with 65,536 zeros no longer crashes; format codes are capped at 255 characters like Excel (longer codes display as General, `TEXT` gives `#VALUE!`) (#807) |
