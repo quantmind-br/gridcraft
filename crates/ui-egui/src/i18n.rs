@@ -144,6 +144,31 @@ impl Language {
     }
 }
 
+/// The region the operating system (or the browser) is set to, best effort; en-US when it is
+/// unknown. Used as the first-run default of the regional format while nothing is saved. On Unix
+/// the formatting locale (`LC_ALL`, `LC_TIME`, `LC_NUMERIC`, `LANG`) decides, not the interface
+/// language `sys_locale` reports, as in an English interface with `LC_TIME=de_DE.UTF-8`.
+pub fn system_region() -> &'static gridcraft_engine::core::Region {
+    #[cfg(unix)]
+    let tag = formatting_locale(|name| std::env::var(name).ok()).or_else(sys_locale::get_locale);
+    #[cfg(all(not(unix), not(target_arch = "wasm32")))]
+    let tag = sys_locale::get_locale();
+    #[cfg(target_arch = "wasm32")]
+    let tag = web_sys::window().and_then(|window| window.navigator().language());
+    tag.map_or_else(gridcraft_engine::core::region::default_region, |tag| gridcraft_engine::core::region::lookup(&tag))
+}
+
+/// The first usable formatting locale of the environment `var` reads: `LC_ALL`, then `LC_TIME`,
+/// then `LC_NUMERIC`, then `LANG`. Empty values and the `C` and `POSIX` locales (with or without an
+/// encoding, `C.UTF-8`) name no region and are skipped.
+#[cfg(unix)]
+fn formatting_locale(var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    ["LC_ALL", "LC_TIME", "LC_NUMERIC", "LANG"].into_iter().filter_map(var).map(|v| v.trim().to_string()).find(|v| {
+        let base = v.split(['.', '@']).next().unwrap_or("");
+        !base.is_empty() && !base.eq_ignore_ascii_case("C") && !base.eq_ignore_ascii_case("POSIX")
+    })
+}
+
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
 /// later version, a hand-edited `ui.json`) reads as English instead of failing the whole `UiState`,
 /// which would reset every other preference with it.
@@ -414,6 +439,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Light", "ライト"),
     ("Dark", "ダーク"),
     ("Interface language", "表示言語"),
+    ("Regional format", "地域の形式"),
     ("Interface size", "表示サイズ"),
     ("Auto", "自動"),
     ("Drag to freeze columns", "ドラッグして列を固定"),
@@ -603,6 +629,28 @@ const JAPANESE: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_formatting_locale_comes_from_lc_all_then_lc_time_then_lc_numeric_then_lang() {
+        fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+            move |name| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_string())
+        }
+        // An English interface with German formats.
+        let formats = [("LANG", "en_US.UTF-8"), ("LC_TIME", "de_DE.UTF-8")];
+        assert_eq!(formatting_locale(env(&formats)).as_deref(), Some("de_DE.UTF-8"));
+        assert_eq!(formatting_locale(env(&[("LC_ALL", "pt_BR.UTF-8"), ("LC_TIME", "de_DE"), ("LANG", "fr_FR")])).as_deref(), Some("pt_BR.UTF-8"));
+        assert_eq!(formatting_locale(env(&[("LC_NUMERIC", "fr_FR.UTF-8"), ("LANG", "en_US")])).as_deref(), Some("fr_FR.UTF-8"));
+        assert_eq!(formatting_locale(env(&[("LANG", "ru_RU.UTF-8")])).as_deref(), Some("ru_RU.UTF-8"));
+        // Empty, C and POSIX name no region; the next variable is used.
+        assert_eq!(formatting_locale(env(&[("LC_ALL", ""), ("LC_TIME", "C"), ("LC_NUMERIC", "POSIX"), ("LANG", "es_ES")])).as_deref(), Some("es_ES"));
+        assert_eq!(formatting_locale(env(&[("LC_ALL", "C.UTF-8"), ("LANG", "it_IT.UTF-8")])).as_deref(), Some("it_IT.UTF-8"));
+        assert_eq!(formatting_locale(env(&[("LANG", "C"), ("LC_TIME", "  ")])), None);
+        assert_eq!(formatting_locale(env(&[])), None);
+        // What it returns reads as a region.
+        assert_eq!(gridcraft_engine::core::region::lookup("de_DE.UTF-8").tag, "de-DE");
+        assert_eq!(gridcraft_engine::core::region::lookup("sr_RS@latin").tag, "en-US", "no Serbian region is built in");
+    }
 
     #[test]
     fn translations_are_unique_and_preserve_unknown_text() {
