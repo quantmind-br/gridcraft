@@ -111,7 +111,18 @@ pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// rules, so a region's separators must not reach it.
 pub fn value_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, region: &Region) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    let f = format_in(&sheet.value(c), style.num_fmt.as_str(), wb, region);
+    value_text_as_in(wb, &sheet.value(c), style.num_fmt.as_str(), region)
+}
+
+/// [`value_text`] for a value and a format code given apart from a cell (print takes the code
+/// from the cell's effective look, which a conditional format can override).
+pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
+    value_text_as_in(wb, v, code, wb.region)
+}
+
+/// [`value_text_as`] in an explicit region.
+pub fn value_text_as_in(wb: &Workbook, v: &Value, code: &str, region: &Region) -> String {
+    let f = format_in(v, code, wb, region);
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;
