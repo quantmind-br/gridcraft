@@ -13,6 +13,9 @@
 //! - errors.#WERT!..#NV,#DATEN_ABRUFEN: https://support.microsoft.com/de-de/excel/functions/error-type-function (ERROR.TYPE table) | https://support.microsoft.com/de-de/excel/functions/cubemember-function ("#DATEN_ABRUFEN…")
 //! - errors.#SPILL!: https://support.microsoft.com/de-de/excel/how-to-correct-a-spill-error (title "#ÜBERLAUF!-Fehler")
 //! - errors.#CALC!: https://support.microsoft.com/de-de/excel/functions/lambda-function ("#KALK!-Fehlermeldung") | https://excelhero.de/funktionen/excel-filter-funktion/ | https://www.tabellenexperte.de/die-neue-filter-funktion-mit-jokersuche/ | https://www.tippscout.de/excel-daten-filtern-ganz-einfach.html
+//!   Observed: German Excel screenshot with an empty =FILTER(…) and =TEILERGEBNIS(9;…) showing #KALK! (https://www.excel-nervt.de/der-moment-wenn-dir-klar-wird-das-ist-kein-muskelkater-das-ist-verschleiss/, 2023);
+//!   a user's empty =SUMME(FILTER(…;…)) showing #KALK (https://www.herber.de/forum/archiv/1952to1956/1955262_KALK.html, 2023).
+//!   Disputed: #1201 and a German Excel user on #1522 report #CALC! in current Excel 365.
 
 use super::Dialect;
 use gridcraft_core::CellError;
@@ -294,8 +297,8 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("LOWER", "KLEIN"),
         // reviewed: sidebar link on MS de-de function pages (page body left MAKEARRAY) | sources: https://support.microsoft.com/de-de/excel/functions/makearray-function
         ("MAKEARRAY", "MATRIXERSTELLEN"),
-        // reviewed: MAP page syntax "=ZUORDNEN (Array1; lambda_or_array<#>)" and example; sidebar says KARTE (MT of the title) – rejected | sources: https://support.microsoft.com/de-de/excel/functions/map-function
-        ("MAP", "ZUORDNEN"),
+        // MAP stays MAP: observed in German Excel 365 (#1201), excelhero.de lists MAP | MAP, and a German
+        // Excel user confirmed it on #1522. The de-de MAP help page's ZUORDNEN is machine translation.
         ("MATCH", "VERGLEICH"),
         ("MAXIFS", "MAXWENNS"),
         ("MDETERM", "MDET"),
@@ -374,6 +377,11 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("RANK.EQ", "RANG.GLEICH"),
         ("RATE", "ZINS"),
         ("RECEIVED", "AUSZAHLUNG"),
+        // reviewed: observed in German Excel 365 (#1201) and listed by excelhero.de; confirmed by a German
+        // Excel user on #1522 | sources: https://excelhero.de/excel-funktionen-deutsch-englisch/
+        ("REGEXEXTRACT", "REGEXEXTRAHIEREN"),
+        ("REGEXREPLACE", "REGEXERSETZEN"),
+        ("REGEXTEST", "REGEXTESTEN"),
         ("REPLACE", "ERSETZEN"),
         // reviewed: MS text-functions reference "ERSETZEN, ERSETZENB"; perfectxl and excel-translator agree | sources: https://support.microsoft.com/de-de/excel/text-functions-reference | https://www.perfectxl.com/academy/functions/translations/english-german/ | https://en.excel-translator.de/functions/text/
         ("REPLACEB", "ERSETZENB"),
