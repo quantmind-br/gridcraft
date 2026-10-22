@@ -225,7 +225,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Light" => "Licht",
         "Dark" => "Donker",
         "Interface language" => "Weergavetaal",
-        "Regional format" => "Regionale indeling",
+        "Regional format" => "Regional format",
         "Interface size" => "Grootte van de interface",
         "Auto" => "Automatisch",
         "Drag to freeze columns" => "Sleep om kolommen te blokkeren",

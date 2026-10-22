@@ -331,7 +331,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Bölmeleri Çöz",
         "Dark Mode" => "Koyu Mod",
         "Interface language" => "Arayüz dili",
-        "Regional format" => "Bölgesel biçim",
+        "Regional format" => "Regional format",
         "Command\nPalette" => "Komut\nPaleti",
         "Agent\nControl" => "Ajan\nKontrolü",
         "Action\nJournal" => "İşlem\nGünlüğü",

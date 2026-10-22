@@ -230,7 +230,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Light", "ライト"),
     ("Dark", "ダーク"),
     ("Interface language", "表示言語"),
-    ("Regional format", "地域の形式"),
+    // English in ja, el, it, nl, pl, ro, tr, uk and vi until two sources agree on Windows' label.
+    ("Regional format", "Regional format"),
     ("Interface size", "表示サイズ"),
     ("Auto", "自動"),
     ("Drag to freeze columns", "ドラッグして列を固定"),

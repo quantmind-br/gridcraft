@@ -219,7 +219,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Anulare înghețare panouri",
         "Dark Mode" => "Mod întunecat",
         "Interface language" => "Limba interfeței",
-        "Regional format" => "Format regional",
+        "Regional format" => "Regional format",
         "Interface size" => "Dimensiunea interfeței",
         "Auto" => "Automat",
         "Drag to freeze columns" => "Trageți pentru a îngheța coloane",

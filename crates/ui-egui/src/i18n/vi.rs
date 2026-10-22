@@ -228,7 +228,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Light" => "Sáng",
         "Dark" => "Tối",
         "Interface language" => "Ngôn ngữ giao diện",
-        "Regional format" => "Định dạng khu vực",
+        "Regional format" => "Regional format",
         "Interface size" => "Kích thước giao diện",
         "Auto" => "Tự động",
         "Drag to freeze columns" => "Kéo để cố định cột",

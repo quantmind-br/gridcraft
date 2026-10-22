@@ -216,7 +216,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Sblocca riquadri",
         "Dark Mode" => "Modalità scura",
         "Interface language" => "Lingua dell'interfaccia",
-        "Regional format" => "Formato regionale",
+        "Regional format" => "Regional format",
         "Interface size" => "Dimensione dell'interfaccia",
         "Auto" => "Auto",
         "Drag to freeze columns" => "Trascina per bloccare le colonne",
