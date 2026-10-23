@@ -317,7 +317,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Κατάργηση σταθεροποίησης παραθύρων",
         "Dark Mode" => "Σκοτεινή λειτουργία",
         "Interface language" => "Γλώσσα περιβάλλοντος",
-        "Regional format" => "Regional format",
         "Command\nPalette" => "Παλέτα\nεντολών",
         "Agent\nControl" => "Έλεγχος\nπρακτόρων",
         "Action\nJournal" => "Ιστορικό\nενεργειών",

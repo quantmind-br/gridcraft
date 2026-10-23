@@ -214,7 +214,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Зняти закріплення областей",
         "Dark Mode" => "Темний режим",
         "Interface language" => "Мова інтерфейсу",
-        "Regional format" => "Regional format",
         "Interface size" => "Розмір інтерфейсу",
         "Auto" => "Авто",
         "Drag to freeze columns" => "Перетягніть, щоб закріпити стовпці",

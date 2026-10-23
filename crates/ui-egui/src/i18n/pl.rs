@@ -212,7 +212,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Odblokuj okienka",
         "Dark Mode" => "Tryb ciemny",
         "Interface language" => "Język interfejsu",
-        "Regional format" => "Regional format",
         "Interface size" => "Rozmiar interfejsu",
         "Auto" => "Automatyczny",
         "Drag to freeze columns" => "Przeciągnij, aby zablokować kolumny",
