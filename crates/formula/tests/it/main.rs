@@ -2,4 +2,5 @@
 
 mod localized_input;
 mod printer_roundtrip;
+mod russian_input;
 mod spanish_input;
