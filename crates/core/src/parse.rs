@@ -207,7 +207,8 @@ fn parse_plain(t: &str, r: &Region) -> Option<(f64, Option<&'static str>)> {
 }
 
 /// A plain ASCII number: digits, with an optional `.digits` fraction when `frac` is set. Rejects
-/// `nan`, `inf`, signs and exponents that `f64::from_str` would accept.
+/// `nan`, `inf`, signs and exponents that `f64::from_str` would accept, and digits too many for a
+/// finite number (#2163).
 fn plain_number(s: &str, frac: bool) -> Option<f64> {
     let (int, dec) = match s.split_once('.') {
         Some((i, d)) if frac => (i, Some(d)),
@@ -217,7 +218,7 @@ fn plain_number(s: &str, frac: bool) -> Option<f64> {
     if !digits(int) || dec.is_some_and(|d| !digits(d)) {
         return None;
     }
-    s.parse().ok()
+    s.parse().ok().filter(|x: &f64| x.is_finite())
 }
 
 /// The whole part of a mixed fraction, with the region's separators (`1.000` is a thousand in
@@ -244,6 +245,9 @@ fn parse_fraction(t: &str, r: &Region) -> Option<f64> {
         return None;
     }
     let v = w + a / b;
+    if !v.is_finite() {
+        return None;
+    }
     Some(if neg { -v } else { v })
 }
 
@@ -451,6 +455,17 @@ mod tests {
 
     fn p(s: &str) -> Parsed {
         parse_input(s, DateSystem::D1900)
+    }
+
+    /// #2163: digits too many for a finite number don't make one (∞/∞ was NaN).
+    #[test]
+    fn overlong_digits_stay_text() {
+        let big = "9".repeat(400);
+        for s in [format!("1 {big}/{big}"), format!("1 {big}/2"), format!("1 1/{big}0"), format!("{big}:00"), format!("1:00:{big}.5")] {
+            assert_eq!(p(&s).value, Value::text(s.as_str()), "{s}");
+            assert_eq!(parse_number_text(&s), None, "{s}");
+        }
+        assert_eq!(parse_number_text("1 1/2"), Some(1.5));
     }
 
     #[test]
