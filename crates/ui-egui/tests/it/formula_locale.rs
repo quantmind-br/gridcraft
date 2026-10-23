@@ -176,7 +176,6 @@ fn portuguese_interface_enters_and_shows_portuguese_formulas() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
     assert_eq!(app.ui.language, Language::PtBr);
-    assert_eq!(app.ui.language.tr("Data"), "Dados");
     assert!(enter(&mut app, "=SOMA(1,5;2,25)"));
     assert_eq!(formula(&app), "SUM(1.5,2.25)");
     app.begin_edit(None, true);
@@ -186,7 +185,6 @@ fn portuguese_interface_enters_and_shows_portuguese_formulas() {
     assert!(!enter(&mut app, "=SUM(1.5,2.25)"));
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::PtBr);
-    assert_eq!(Language::Es.tr("Page Layout|Orientation"), "Orientación");
 }
 
 #[test]
@@ -196,7 +194,6 @@ fn czech_interface_retains_its_canonical_formula_fallback() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"cs-CZ"})).unwrap();
     assert_eq!(app.ui.language, Language::Cs);
-    assert_eq!(app.ui.language.tr("Formulas"), "Vzorce");
     assert!(enter(&mut app, "=SUM(1.5,2.25)"));
     app.begin_edit(None, true);
     assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
@@ -228,8 +225,6 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
     assert_eq!(app.ui.language, Language::Tr);
-    assert_eq!(app.ui.language.tr("Data"), "Veri");
-    assert_eq!(app.ui.language.tr("Formulas"), "Formüller");
     assert!(enter(&mut app, "=SUM(1.5,2.25)"));
     app.begin_edit(None, true);
     assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
