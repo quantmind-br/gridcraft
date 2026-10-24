@@ -9,6 +9,7 @@ use gridcraft_core::CellError;
 
 use crate::{Expr, ParseError, parser, same_name};
 
+mod de;
 mod es;
 
 /// Formula-entry syntax selected by the interface language. Interface languages without a
@@ -18,6 +19,7 @@ pub enum FormulaLocale {
     #[default]
     En,
     Es,
+    De,
 }
 
 /// One formula language's words and separators.
@@ -41,13 +43,14 @@ pub(crate) struct Dialect {
 const TABLE_ITEMS: [&str; 5] = ["#All", "#Data", "#Headers", "#Totals", "#This Row"];
 
 impl FormulaLocale {
-    pub const ALL: [Self; 2] = [Self::En, Self::Es];
+    pub const ALL: [Self; 3] = [Self::En, Self::Es, Self::De];
 
     /// The language's table; `None` for English, which is the canonical syntax itself.
     fn dialect(self) -> Option<&'static Dialect> {
         match self {
             Self::En => None,
             Self::Es => Some(&es::DIALECT),
+            Self::De => Some(&de::DIALECT),
         }
     }
 
