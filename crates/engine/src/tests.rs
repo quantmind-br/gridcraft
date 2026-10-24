@@ -4430,7 +4430,7 @@ fn region_applies_to_every_document_new_documents_and_undo() {
     assert!(!json_bytes.contains("fr-FR"));
     let back: gridcraft_model::Workbook = serde_json::from_str(&json_bytes).unwrap();
     assert_eq!(back.region.tag, "en-US");
-    c.add_document(crate::DocState::new(back, None, "Back".into()));
+    c.add_document(crate::DocState::new(back, None, "Back".into(), crate::Trust::FromFile));
     assert_eq!(c.doc().unwrap().wb.region.tag, "fr-FR");
     // Preferences replaced from a file are applied explicitly.
     c.prefs = serde_json::from_str(r#"{"region": "it-IT"}"#).unwrap();
