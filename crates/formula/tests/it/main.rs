@@ -2,5 +2,6 @@
 
 mod german_input;
 mod localized_input;
+mod portuguese_input;
 mod printer_roundtrip;
 mod spanish_input;
