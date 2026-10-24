@@ -451,6 +451,14 @@ pub fn current_year() -> i64 {
     2026
 }
 
+/// Whether `b` could be the time of a date and time: short, holding the region's time separator,
+/// and starting with a digit, or with a non-ASCII AM/PM word (`午後 3:30`) that CJK regions put
+/// before the time. A tail that fails this can't parse, and skipping it keeps the date-and-time
+/// search linear in the text (#2413).
+fn could_be_time_tail(b: &str, r: &Region) -> bool {
+    b.len() <= 36 && b.contains(r.time_sep) && b.chars().next().is_some_and(|c| c.is_ascii_digit() || !c.is_ascii())
+}
+
 fn parse_datetime(t: &str, sys: DateSystem, r: &Region) -> Option<(f64, Option<&'static str>)> {
     if let Some((tf, secs, ampm)) = parse_time(t, r) {
         let f = match (secs, ampm) {
@@ -466,10 +474,15 @@ fn parse_datetime(t: &str, sys: DateSystem, r: &Region) -> Option<(f64, Option<&
     if let Some((d, f)) = parse_date(t, sys, r) {
         return Some((d, Some(f)));
     }
-    // date + time: split at the last space(s) before a time-looking tail.
+    // date + time: split at the last space(s) before a time-looking tail. Only splits where the
+    // tail could be a time are tried: a long tail can't parse, so this stays linear in the text
+    // instead of reparsing every prefix for every space (one long text field quadratic).
     for (i, _) in t.match_indices(' ') {
-        let (a, b) = (t.get(..i)?, t.get(i + 1..)?);
-        if let (Some((d, _)), Some((tf, _, _))) = (parse_date(a, sys, r), parse_time(b, r)) {
+        let Some(b) = t.get(i + 1..) else { continue };
+        if !could_be_time_tail(b, r) {
+            continue;
+        }
+        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys, r)), parse_time(b, r)) {
             return Some((d + tf, Some("m/d/yyyy h:mm")));
         }
     }
@@ -493,6 +506,37 @@ mod tests {
             assert_eq!(parse_number_text(&s), None, "{s}");
         }
         assert_eq!(parse_number_text("1 1/2"), Some(1.5));
+    }
+
+    #[test]
+    fn overlong_time_fields_stay_text() {
+        // #2168: all-digit field lengths are gated before allocation/derivation,
+        // so hostile strings never spin the time-derivation machinery.
+        let big = "9".repeat(500);
+        for s in [format!("{big}:00"), format!("1:00:{big}"), format!("{big}:{big}:{big}"), format!("1:0{big}"), format!("00:00:{big}.1")] {
+            assert_eq!(p(&s).value, Value::text(s.as_str()), "{s}");
+            assert_eq!(parse_number_text(&s), None, "{s}");
+        }
+        // Within the gate, times still work.
+        assert_eq!(p("01:02:03").value, Value::number(3.0 / 86_400.0 + 1.0 / 24.0 + 2.0 / 1440.0));
+        assert_eq!(parse_number_text("13:14:15"), Some(0.5515625));
+    }
+
+    /// The date-and-time search skips tails that can't be a time in every region (#2413), so one
+    /// long text field costs linear, not quadratic, work; times the regions write still read.
+    #[test]
+    fn date_and_time_search_stays_linear_in_every_region() {
+        let started = std::time::Instant::now();
+        for region in ["en-US", "de-DE", "ja-JP", "ko-KR", "ru-RU"] {
+            let long = "25.09.2026 ".repeat(20_000);
+            assert_eq!(pin(region, &long).value, Value::text(long.as_str()), "{region}");
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "long text took {:?}", started.elapsed());
+        for (region, s) in
+            [("ja-JP", "2026/9/25 午後3:30"), ("ja-JP", "2026/9/25 午後 3:30"), ("ko-KR", "2026-09-25 오후 3:30"), ("es-ES", "25/09/2026 3:30 p. m.")]
+        {
+            assert_eq!(pin(region, s).value, Value::Number(46290.0 + 15.5 / 24.0), "{region} {s}");
+        }
     }
 
     #[test]
