@@ -66,10 +66,11 @@ right-to-left sheets and full complex-script support. Part of
 File › Options › Regional format (command `app.region`, [control-protocol.md](control-protocol.md))
 selects the region, independently of the interface language, as Excel's Region setting does. It
 is a session preference saved with the others; the desktop app starts from the system region, the
-web app from `navigator.language`, and headless sessions from en-US. 15 regions are built in
-(`crates/core/src/region.rs`, data from CLDR): en-US, en-GB, en-IN, es-ES, de-DE, fr-FR, it-IT,
-pt-BR, pt-PT, ru-RU, cs-CZ, ja-JP, ko-KR, zh-CN, zh-TW. Other system regions fall back to their
-language's main region.
+web app from `navigator.language`, and headless sessions from en-US. 20 regions are built in
+(`crates/core/src/region.rs`, data from CLDR): en-US, en-GB, en-IN, en-CH, es-ES, de-DE, de-CH,
+fr-FR, fr-CH, it-IT, it-CH, nl-NL, pt-BR, pt-PT, ru-RU, cs-CZ, ja-JP, ko-KR, zh-CN, zh-TW. The
+Swiss regions group digits with an apostrophe (`1'234.50`). Other system regions fall back to
+their language's main region.
 
 - **Typing:** decimal and group separators, Indian grouping, currency symbols, percent, dates in
   the region's day/month/year order (two-digit years, local month names, ISO), and times with the
@@ -162,7 +163,7 @@ language (none so far) and of localized function names.
 | 2026-10-12 | minor | Turkish ribbon catalog (`i18n/tr.rs`, 382 labels); `tr` locale tags (tr-TR, tr_TR…) resolve to Turkish |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
-| 2026-10-11 | minor | Regional formats: typing and showing numbers, dates and times by region (`app.region`, 15 regions, Backstage Options combo) |
+| 2026-10-11 | minor | Regional formats: typing and showing numbers, dates and times by region (`app.region`, 20 regions, Backstage Options combo) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |
 | 2026-10-11 | minor | Sheet Right-to-Left mirrors the grid (#146) |
 | 2026-10-11 | minor | Czech (cs) ribbon table: 266 labels (~12%), menus only |

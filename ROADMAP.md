@@ -97,7 +97,7 @@ interface follows the system language, and CJK, Thai and Hebrew text falls back 
 (#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
 The remaining dialogs, menus and messages are English; formulas are en-US (plus Spanish). Numbers,
-dates and times follow a Regional format setting (15 regions; File › Options, `app.region`).
+dates and times follow a Regional format setting (20 regions; File › Options, `app.region`).
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
@@ -199,7 +199,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-11 | XLSX pass-through: custom XML, external links, connections, query tables, printer settings, form/ActiveX controls and OLE objects are kept on save (#330, #324) |
 | 2026-10-11 | Data › Forecast › Forecast Sheet: a new sheet with the history, FORECAST.ETS forecast, confidence bounds, statistics and a chart (#322) |
 | 2026-10-11 | Startup no longer panics on a system font egui can't parse: fonts are validated and skipped (#226) |
-| 2026-10-11 | Regional formats: File › Options › Regional format (`app.region`) changes how numbers, dates and times are typed and shown, for 15 regions |
+| 2026-10-11 | Regional formats: File › Options › Regional format (`app.region`) changes how numbers, dates and times are typed and shown, for 20 regions |
 | 2026-10-11 | Ctrl+drag on the fill handle swaps copying and extending a series (#264) |
 | 2026-10-11 | Odd-period bond functions ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD: Financial 55 / 55 (#275) |
 | 2026-10-11 | PERCENTOF and EUROCONVERT worksheet functions (#279) |
