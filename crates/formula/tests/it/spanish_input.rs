@@ -126,6 +126,22 @@ fn spanish_display_round_trips_text_containing_separators() {
 }
 
 #[test]
+fn full_spanish_table() {
+    let full = |src: &str| print(&parse_input(src, FormulaLocale::Es, |_| false).unwrap());
+    assert!(FormulaLocale::Es.translations().len() > 350);
+    assert_eq!(full("CONTAR.SI.CONJUNTO(A1:A3;\">1\")"), "COUNTIFS(A1:A3,\">1\")");
+    assert_eq!(full("SI.ERROR(1/0;#¡VALOR!)"), "IFERROR(1/0,#VALUE!)");
+    // A local name that is another function's English name means the local function, as in
+    // Spanish Excel: DECIMAL is FIXED there, and the base conversion is CONV.DECIMAL.
+    assert_eq!(full("DECIMAL(1,5;1)"), "FIXED(1.5,1)");
+    assert_eq!(full("CONV.DECIMAL(\"FF\";16)"), "DECIMAL(\"FF\",16)");
+    assert_eq!(
+        print_input(&parse("IFERROR(FIXED(1.5,1),DECIMAL(\"FF\",16))").unwrap(), FormulaLocale::Es, |_| false).unwrap(),
+        "SI.ERROR(DECIMAL(1,5;1);CONV.DECIMAL(\"FF\";16))"
+    );
+}
+
+#[test]
 fn local_names_match_aliases_in_any_case_like_the_evaluator() {
     // `ſi` (long s) is `SI` case-insensitively, so the call is the LAMBDA, not IF.
     assert_eq!(input("LET(ſi;LAMBDA(x;x*2);SI(3))"), "LET(ſi,LAMBDA(x,x*2),SI(3))");
