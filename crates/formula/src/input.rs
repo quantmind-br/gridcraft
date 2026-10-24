@@ -12,6 +12,7 @@ use crate::{Expr, ParseError, parser, same_name};
 mod de;
 mod es;
 mod pt;
+mod ru;
 
 /// Formula-entry syntax selected by the interface language. Interface languages without a
 /// formula table use [`FormulaLocale::En`].
@@ -22,6 +23,7 @@ pub enum FormulaLocale {
     Es,
     De,
     PtBr,
+    Ru,
 }
 
 /// One formula language's words and separators.
@@ -45,7 +47,7 @@ pub(crate) struct Dialect {
 const TABLE_ITEMS: [&str; 5] = ["#All", "#Data", "#Headers", "#Totals", "#This Row"];
 
 impl FormulaLocale {
-    pub const ALL: [Self; 4] = [Self::En, Self::Es, Self::De, Self::PtBr];
+    pub const ALL: [Self; 5] = [Self::En, Self::Es, Self::De, Self::PtBr, Self::Ru];
 
     /// The language's table; `None` for English, which is the canonical syntax itself.
     fn dialect(self) -> Option<&'static Dialect> {
@@ -54,6 +56,7 @@ impl FormulaLocale {
             Self::Es => Some(&es::DIALECT),
             Self::De => Some(&de::DIALECT),
             Self::PtBr => Some(&pt::DIALECT),
+            Self::Ru => Some(&ru::DIALECT),
         }
     }
 

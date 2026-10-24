@@ -11,6 +11,7 @@ formulas.
 | Español | `SUMA`, `SI`, `BUSCARV` | 434 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
 | Deutsch | `SUMME`, `WENN`, `SVERWEIS` | 415 | `WAHR`, `FALSCH` | `#WERT!`, `#NV` | `;` / `,` | `.` / `;` | `#Kopfzeilen`, `#Diese Zeile` |
 | Português (Brasil) | `SOMA`, `SE`, `PROCV` | 420 | `VERDADEIRO`, `FALSO` | `#VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Cabeçalhos`, `#Esta Linha` |
+| Русский | `СУММ`, `ЕСЛИ`, `ВПР` | 471 | `ИСТИНА`, `ЛОЖЬ` | `#ЗНАЧ!`, `#Н/Д` | `;` / `,` | `;` / `:` | `#Заголовки`, `#Эта строка` |
 
 The Spanish function names:
 

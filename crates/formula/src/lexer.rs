@@ -219,8 +219,11 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 while ch(j).is_some_and(|d| d.is_ascii_digit()) {
                     j += 1;
                 }
-                // Row ranges `1:3`, and the trim forms `1.:3`, `1:.3`, `1.:.3`.
-                let is_row_ref = {
+                // Row ranges `1:3`, and the trim forms `1.:3`, `1:.3`, `1.:.3`. Array constants hold
+                // no references, so where `:` separates array rows (ru-RU) a number followed by `:`
+                // inside braces is a number.
+                let rows_by_colon = array_depth > 0 && locale.array_row_separator() == ':';
+                let is_row_ref = !rows_by_colon && {
                     let mut k = j;
                     if ch(k) == Some('.') && ch(k + 1) == Some(':') {
                         k += 1;
@@ -299,7 +302,10 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 i += 1;
             }
             ':' => {
-                if ch(i + 1) == Some('.') && starts_range_end(ch(i + 2)) {
+                if array_depth > 0 && locale.array_row_separator() == ':' {
+                    push(&mut out, Tok::Semicolon, i + 1);
+                    i += 1;
+                } else if ch(i + 1) == Some('.') && starts_range_end(ch(i + 2)) {
                     push(&mut out, Tok::Trim(TrimMode::Trailing), i + 2);
                     i += 2;
                 } else {
