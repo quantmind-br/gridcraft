@@ -853,6 +853,18 @@ mod tests {
     }
 
     #[test]
+    fn swiss_apostrophe_groups() {
+        assert_eq!(pin("de-CH", "1'234'567.5").value, Value::Number(1234567.5));
+        assert_eq!(pin("de-CH", "1\u{2019}234.50").format, Some("#,##0.00"));
+        assert_eq!(pin("fr-CH", "1'234.50 CHF").value, Value::Number(1234.5));
+        assert_eq!(pin("de-CH", "CHF 1'234.50").format, Some("\"CHF\" #,##0.00"));
+        assert_eq!(pin("de-CH", "12'3").value, Value::text("12'3"));
+        // A leading apostrophe still makes text, and other regions don't group with one.
+        assert_eq!(pin("de-CH", "'123").value, Value::text("123"));
+        assert_eq!(pin("de-DE", "1'234").value, Value::text("1'234"));
+    }
+
+    #[test]
     fn indian_grouping() {
         assert_eq!(pin("en-IN", "12,34,567.89").value, Value::Number(1234567.89));
         assert_eq!(pin("en-IN", "1,234,567.89").value, Value::Number(1234567.89));
