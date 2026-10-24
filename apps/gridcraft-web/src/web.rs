@@ -69,6 +69,12 @@ pub fn start() {
                     ) {
                         app.ui.language = browser;
                     }
+                    // The browser's regional format too, with the same CJK exception: month names and AM/PM
+                    // words of those regions need a CJK font the web build doesn't have.
+                    let region = gridcraft_ui_egui::i18n::system_region();
+                    if !matches!(region.tag, "ja-JP" | "ko-KR" | "zh-CN" | "zh-TW") {
+                        let _ = app.session.set_region(region.tag);
+                    }
                     // Preferences from an earlier visit (#1562), as the desktop app reads `ui.json`
                     // and `prefs.json`; a saved language replaces the browser's.
                     let (stored_ui, stored_prefs) = (stored(crate::prefs::UI_KEY), stored(crate::prefs::PREFS_KEY));

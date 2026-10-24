@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             validation
         ),
-        cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
+        cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input, region?: tag the input was typed in (default: canonical en-US text)} → {ok, message?}", has_doc, validate_cmd),
         cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
         cmd!(
             "data.group",
@@ -678,7 +678,15 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
+    // A Values criterion holds labels as the dropdown shows them (the region's text). The column's
+    // own labels, lowercased: a label that some cell shows is matched against what cells show only.
+    let mut labels: std::collections::HashMap<usize, std::collections::HashSet<String>> = std::collections::HashMap::new();
     for (i, (off, c)) in af.criteria.iter().enumerate() {
+        if matches!(c, FilterCriterion::Values { .. }) {
+            let col = r.start.col + off;
+            let shown = (r.start.row + 1..=r.end.row).map(|row| crate::display::cell_text(wb, sh, CellRef::new(row, col)).to_lowercase()).collect();
+            labels.insert(i, shown);
+        }
         if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
             let col = r.start.col + off;
             let mut nums: Vec<f64> = (r.start.row + 1..=r.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
@@ -706,7 +714,13 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     if filter_blank(&v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                        // Besides the shown text, a value a script passes in its canonical spelling
+                        // (`1234` for a cell shown as `1,234`) matches, unless it is itself a label.
+                        let shown = labels.get(&i);
+                        values.iter().any(|x| {
+                            x.eq_ignore_ascii_case(&text)
+                                || (x.eq_ignore_ascii_case(&v.display()) && !shown.is_some_and(|l| l.contains(&x.to_lowercase())))
+                        })
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
@@ -967,7 +981,7 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
+            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb, &gridcraft_core::region::EN_US).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),
@@ -1155,8 +1169,8 @@ fn list_source(f: &str) -> String {
     format!("\"{}\"", t.replace('"', "\"\""))
 }
 
-/// List entries of a list validation (literal or from a range).
-pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
+/// The entries of a list validation: text for a literal list, the cells' values for a range.
+fn list_entries(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<Value> {
     let f = dv.f1.trim();
     if is_literal_list(f) {
         // A quoted list is a string literal: `""` inside stands for one `"`.
@@ -1164,18 +1178,35 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
             Some(body) => body.replace("\"\"", "\""),
             None => f.trim_matches('"').to_string(),
         };
-        return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+        return items.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).map(Value::text).collect();
     }
     let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
     match gridcraft_calc::evaluate(wb, sheet, at, f) {
-        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
-        v if !v.is_empty() && !v.is_error() => vec![v.display()],
+        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).cloned().collect(),
+        v if !v.is_empty() && !v.is_error() => vec![v],
         _ => vec![],
     }
 }
 
-/// Checks typed input against the validation of a cell. `Ok(None)` = valid.
-pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+/// List entries of a list validation (literal or from a range), as canonical text.
+pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
+    list_entries(wb, sheet, dv).iter().map(Value::display).collect()
+}
+
+/// Whether typed `input` (read as `parsed` in the region it was typed in) is an entry of the list.
+/// Text entries are compared as text; a number or date from a range by its value, so `1,5` is the
+/// cell holding 1.5 in a decimal-comma region.
+fn list_has(entries: &[Value], input: &str, parsed: &Value) -> bool {
+    entries.iter().any(|e| match (e, parsed) {
+        (Value::Number(n), Value::Number(m)) => n == m,
+        (Value::Number(_), _) => false,
+        _ => e.display().eq_ignore_ascii_case(input),
+    })
+}
+
+/// Checks typed input against the validation of a cell. `Ok(None)` = valid. `region` is how the
+/// input was typed (en-US for a canonical `input_text`).
+pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str, region: &gridcraft_core::Region) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -1184,7 +1215,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = gridcraft_core::parse::parse_input_in(input, wb.date_system, region).value;
     // The formulas are written for the first cell of the range and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = dv.ranges.first().map(|r| r.start).unwrap_or(at);
@@ -1203,7 +1234,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => list_has(&list_entries(wb, sheet, dv), input, &v),
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;
@@ -1276,7 +1307,8 @@ fn validate_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let input = str_param(p, "input").unwrap_or("");
-    match check_validation(&d.wb, d.wb.active_sheet, at, input) {
+    let region = typed_region(p, "data.validate")?;
+    match check_validation(&d.wb, d.wb.active_sheet, at, input, region) {
         None => Ok(json!({"ok": true})),
         Some((dv, msg)) => Ok(json!({"ok": false, "message": msg, "title": dv.error_title, "style": format!("{:?}", dv.error_style)})),
     }
@@ -1292,8 +1324,9 @@ fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             let r = sh.used_range().and_then(|u| r.intersection(&u));
             let Some(r) = r else { continue };
             for c in r.iter().take(100_000) {
+                // The stored value's canonical text: en-US, like `data.validate` without a region.
                 let text = sh.input_text(c);
-                if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
+                if !text.is_empty() && check_validation(&d.wb, sheet, c, &text, gridcraft_core::region::default_region()).is_some() {
                     bad_cells.push(c.a1());
                 }
             }
@@ -1878,8 +1911,8 @@ mod tests {
         let check = |wb: &Workbook| {
             for (cell, input) in accepted {
                 let at = CellRef::parse(cell).unwrap();
-                assert!(check_validation(wb, 0, at, input).is_none(), "{cell} refuses {input}");
-                assert!(check_validation(wb, 0, at, "Pending").is_some(), "{cell} accepts Pending");
+                assert!(check_validation(wb, 0, at, input, wb.region).is_none(), "{cell} refuses {input}");
+                assert!(check_validation(wb, 0, at, "Pending", wb.region).is_some(), "{cell} accepts Pending");
             }
         };
         let wb = s.doc().unwrap().wb.clone();
@@ -1926,6 +1959,6 @@ mod tests {
         }
         let sh = s.doc().unwrap().wb.active().unwrap().clone();
         assert_eq!(sh.validations.len(), 3);
-        assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
+        assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0", gridcraft_core::region::default_region()).is_some());
     }
 }

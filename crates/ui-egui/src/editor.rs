@@ -21,6 +21,9 @@ pub struct EditState {
     pub sheet: usize,
     /// Syntax of this edit, captured when it starts (prevents a language switch reinterpreting it).
     pub locale: gridcraft_engine::formula::FormulaLocale,
+    /// The region this text is typed in, captured when the edit starts like `locale`: switching
+    /// the regional format during an edit must not reread the buffer.
+    pub region: &'static gridcraft_engine::core::Region,
     pub cell: CellRef,
     pub text: String,
     /// Started by typing (Enter mode: arrows commit) rather than F2 (Edit mode: arrows move the caret).
@@ -51,6 +54,7 @@ impl EditState {
         EditState {
             sheet,
             locale: Default::default(),
+            region: gridcraft_engine::core::region::default_region(),
             cell,
             text,
             enter_mode,
