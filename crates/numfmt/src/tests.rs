@@ -907,6 +907,9 @@ fn regional_separators() {
     assert_eq!(fin("de-DE", "0.00%", 0.1234), "12,34%");
     assert_eq!(fin("de-DE", "#,##0,", 1234567.0), "1.235");
     assert_eq!(fin("de-DE", "0.0,\"x\"", 5000.0), "5,0x");
+    assert_eq!(fin("de-CH", "#,##0.00", 1234567.891), "1'234'567.89");
+    assert_eq!(fin("fr-CH", "#,##0.00", -1234.5), "-1'234.50");
+    assert_eq!(fin("nl-NL", "m/d/yyyy", 46290.0), "25-09-2026");
 }
 
 #[test]
