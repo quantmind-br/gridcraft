@@ -1,13 +1,18 @@
-//! Brazilian Portuguese formulas: entry and display syntax.
+//! Brazilian Portuguese formulas: entry and display syntax, with the separators of a Brazilian
+//! region.
 use gridcraft_formula::FormulaLocale::{self, PtBr};
-use gridcraft_formula::{parse, parse_input, print, print_input};
+use gridcraft_formula::{Separators, parse, parse_input, print, print_input};
+
+fn pt_br() -> Separators {
+    Separators::new(PtBr, gridcraft_core::region::lookup("pt-BR"))
+}
 
 fn canonical(src: &str, locale: FormulaLocale) -> String {
-    print(&parse_input(src, locale, |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
+    print(&parse_input(src, locale, pt_br(), |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
 }
 
 fn shown(canonical: &str, locale: FormulaLocale) -> String {
-    print_input(&parse(canonical).unwrap(), locale, |_| false).unwrap()
+    print_input(&parse(canonical).unwrap(), locale, pt_br(), |_| false).unwrap()
 }
 
 #[test]
@@ -28,6 +33,6 @@ fn functions_passed_by_name_and_malformed_input() {
     assert_eq!(canonical("AGRUPARPOR(A2:A9;B2:B9;soma)", PtBr), "GROUPBY(A2:A9,B2:B9,SUM)");
     assert_eq!(shown("_xlfn.GROUPBY(A2:A9,B2:B9,_xleta.SUM)", PtBr), "AGRUPARPOR(A2:A9;B2:B9;SOMA)");
     for bad in ["SOMA(1,", "{SOMA(1)}"] {
-        assert!(parse_input(bad, PtBr, |_| false).is_err(), "{bad}");
+        assert!(parse_input(bad, PtBr, pt_br(), |_| false).is_err(), "{bad}");
     }
 }

@@ -232,12 +232,16 @@ fn formula_modifier_shift_click_keeps_its_anchor_in_both_directions() {
 
 #[test]
 fn formula_modifier_command_click_respects_locale_and_a_typed_separator() {
-    use gridcraft_engine::formula::FormulaLocale;
+    use gridcraft_engine::core::region;
+    use gridcraft_engine::formula::{FormulaLocale, Separators};
     let command = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
-    for (locale, prefix, separator) in [(FormulaLocale::En, "=SUM(", ","), (FormulaLocale::Es, "=SUMA(", ";")] {
+    // The argument separator is the region's (Spanish in es-ES: `;`).
+    for (locale, tag, prefix, separator) in [(FormulaLocale::En, "en-US", "=SUM(", ","), (FormulaLocale::Es, "es-ES", "=SUMA(", ";")] {
         let mut h = harness("J10");
         h.state_mut().begin_edit(Some(prefix.into()), false);
-        h.state_mut().editor.as_mut().unwrap().locale = locale;
+        let editor = h.state_mut().editor.as_mut().unwrap();
+        editor.locale = locale;
+        editor.separators = Separators::new(locale, region::lookup(tag));
         h.run_steps(2);
         click_with_modifiers(&mut h, "C3", command);
         assert_eq!(h.state().editor.as_ref().unwrap().text, format!("{prefix}C3"));

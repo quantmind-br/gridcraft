@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (Brazilian Portuguese function help; missing translations are listed by `cargo xtask i18n-report` and never fail a check; formula languages are data tables; the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog; regional formats added; defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (Brazilian Portuguese function help; missing translations are listed by `cargo xtask i18n-report` and never fail a check; formula languages are data tables; the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog; regional formats added; defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context; formula separators follow the region) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -37,11 +37,15 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **Formulas follow the interface language where a formula table exists** (#45): function names,
-  booleans, errors, table specifiers and separators, at the editor boundary only; files and APIs
-  keep canonical English ([formula-input.md](formula-input.md) lists the languages). Each language
-  is a data file in `crates/formula/src/input/` with a source per entry. Number, date and time formats follow a separate Regional format
-  setting (see below).
+- **Formulas follow the interface language in Spanish, German, Brazilian Portuguese, Russian
+  and French** (#45): function names (405–471 per language), booleans, errors and table
+  specifiers, at the editor boundary only; files and APIs keep canonical English
+  ([formula-input.md](formula-input.md)). Their separators follow the Regional format, as in
+  Excel (English Excel with a Croatian region takes `=SUM(1;2)`). The names come from
+  machine-translated Microsoft pages (two agreeing signals per entry, sources in
+  `crates/formula/src/input/`); only the French separators and a few French words were checked
+  in a running Excel (#191). Other interface languages keep English names. Number, date and
+  time formats follow the same Regional format setting (see below).
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -79,6 +83,9 @@ language's main region.
   region's short date; `[$-F800]` and `[$-F400]` (Long Date, Time) show the region's long date and
   time. Stored values, formulas and format codes are never rewritten, so changing region only
   changes how they read.
+- **Formulas:** the argument and decimal separators of formulas typed in the cell editor and
+  formula bar (`=SUM(1,5;2)` in de-DE, whatever the interface language), and `\` between array
+  columns where the language's own column separator is the region's decimal.
 - **Commands stay canonical.** Text sent to a command (`cell.set`, scripts, MCP) is read as en-US
   unless the call carries `region`, so a recorded script never depends on the preference; the
   interface passes the workbook's region when it commits typed input. Files stay en-US: CSV is
@@ -128,9 +135,9 @@ language (none so far) and of localized function names.
    status and error messages, command labels, function descriptions). A string a catalog lacks
    shows in English and never fails a check: `cargo xtask i18n-report` lists the missing strings
    per language, and `cargo xtask ci` runs it first. Language switching and the system-language default already exist (#31).
-2. Locale-aware formulas: one function table per language at the formula-bar boundary (files keep
-   canonical names); still missing: tables for the languages without one, locale number and date
-   formats, list separators in CSV.
+2. Locale-aware formulas: function tables exist for es, de, pt-BR, ru and fr at the formula-bar
+   boundary (files keep canonical names), with separators from the region; still missing:
+   tables for Czech and the other languages, list separators in CSV.
 3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
    Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
    embedded subset fonts in PDF.
@@ -160,8 +167,10 @@ language (none so far) and of localized function names.
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | minor | Italian catalog (`i18n/it.rs`, 971 entries, ~44%): every key the Brazilian Portuguese catalog translates plus the PivotTable Fields pane strings; `it` locale tags (it-IT, it-CH…) resolve to Italian. Labels follow Excel's Italian terminology; native-speaker review still pending |
 | 2026-10-15 | minor | Formula languages are data: names, booleans, errors, table specifiers and separators per language in one table read by the lexer, parser and printer; infrastructure item 2 partly done |
+| 2026-10-14 | minor | Formula separators follow the Regional format instead of the interface language: argument and decimal separators are the region's, array separators the language's with `\` where they would clash with the decimal (measured combinations: #447, Stack Overflow 57120417) |
 | 2026-10-14 | minor | CJK fallback probes the read-only Flatpak host font mounts with the existing distribution layouts and TTC locale indices; no new sandbox permissions or bundled fonts |
 | 2026-10-12 | minor | Turkish ribbon catalog (`i18n/tr.rs`, 382 labels); `tr` locale tags (tr-TR, tr_TR…) resolve to Turkish |
+| 2026-10-13 | minor | French formula table: 405 local function names, `VRAI`/`FAUX`, French errors and table specifiers, `.` between array columns; separators and some names checked in French Excel 2013 and 2024 (#191) |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | Regional formats: typing and showing numbers, dates and times by region (`app.region`, 15 regions, Backstage Options combo) |

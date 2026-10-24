@@ -96,9 +96,13 @@ added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
 (#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
-The remaining dialogs, menus and messages are English; formulas are en-US (plus Spanish). Numbers,
-dates and times follow a Regional format setting (15 regions; File › Options, `app.region`).
-Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
+The remaining dialogs, menus and messages are English. Formulas follow the interface language in
+Spanish, German, Brazilian Portuguese, Russian and French (function names, booleans, errors and
+table specifiers at the editor; files keep English: [formula-input.md](docs/formula-input.md));
+numbers, dates, times and formula separators follow a Regional format setting (15 regions;
+File › Options, `app.region`).
+PR #163 (German formulas and numbers) is open. Detail:
+[localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
 |---|---|---|---|
@@ -159,6 +163,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | Formula dialects: a formula language is one data table (names, booleans, errors, table specifiers, separators) read by the lexer, parser and printer; Spanish now also spells errors (`#¡VALOR!`) and table specifiers (`[#Encabezados]`), and local names may use any script |
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
 | 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
+| 2026-10-14 | Formula separators follow the Regional format, as in Excel, not the interface language: `=SUM(1;2)` with English names in de-DE, `=SOMME(1,2)` with French names in en-US; array separators keep the language's own, with `\` between columns where that would be the region's decimal |
 | 2026-10-14 | Protect Sheet on a protected sheet: Home › Format, its keytips (HOP, RPS) and the tab menu now read Unprotect Sheet… and unprotect (straight away without a password); a protected sheet that forbids selecting locked (or unlocked) cells is enforced for clicks, arrows and Go To, and the Protect Sheet dialog has the select options (#1346) |
 | 2026-10-14 | XLSX: formulas opened with dynamic-array metadata (`cm`) keep it on save, with `xl/metadata.xml`. Before, a formula returning one value lost it (11 of 40 corpus files that have the part lost it entirely), and Excel recalculated some of them with implicit intersection (`SUMPRODUCT(IFERROR(...))` changed value) |
 | 2026-10-14 | Recalculation: a dynamic array's anchor given a new formula that reads its old spill area (`A1` was `=SEQUENCE(3)`, becomes `=SUM(A2:A3)+1` or `=SEQUENCE(1,A2+1)`) sees that area empty instead of the old values |

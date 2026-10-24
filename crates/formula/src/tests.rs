@@ -459,7 +459,8 @@ fn spanish_input_counts_left_operand_of_a_chain_at_the_same_depth() {
         }
         e
     };
-    let es = |e: &Expr| crate::print_input(e, FormulaLocale::Es, |_| false);
+    let separators = crate::Separators::new(FormulaLocale::Es, gridcraft_core::region::lookup("es-ES"));
+    let es = |e: &Expr| crate::print_input(e, FormulaLocale::Es, separators, |_| false);
     let deepest = (0..400).take_while(|&n| es(&wrap(n)).is_ok()).last().expect("depth 0 is accepted");
     assert!(deepest > 1 && deepest < 400);
     let chain = Expr::Binary(BinOp::Add, Box::new(wrap(deepest)), Box::new(Expr::Number(1.0)));

@@ -19,8 +19,12 @@ pub const REF_COLORS: [Color32; 8] = [
 #[derive(Clone, Debug)]
 pub struct EditState {
     pub sheet: usize,
-    /// Syntax of this edit, captured when it starts (prevents a language switch reinterpreting it).
+    /// Syntax of this edit, captured when it starts (prevents a language or region switch
+    /// reinterpreting it): the words come from the interface language, the separators from the
+    /// region.
     pub locale: gridcraft_engine::formula::FormulaLocale,
+    /// The separators of `locale` in `region`, captured with them.
+    pub separators: gridcraft_engine::formula::Separators,
     /// The region this text is typed in, captured when the edit starts like `locale`: switching
     /// the regional format during an edit must not reread the buffer.
     pub region: &'static gridcraft_engine::core::Region,
@@ -54,6 +58,7 @@ impl EditState {
         EditState {
             sheet,
             locale: Default::default(),
+            separators: Default::default(),
             region: gridcraft_engine::core::region::default_region(),
             cell,
             text,
@@ -119,7 +124,7 @@ impl EditState {
     /// Add another argument after the current pointed reference. Keep only the new reference
     /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
     pub fn append_ref(&mut self, r: &str) {
-        let separator = if self.point_at_caret() { self.locale.list_separator().to_string() } else { String::new() };
+        let separator = if self.point_at_caret() { self.separators.list.to_string() } else { String::new() };
         self.point = None;
         self.insert_ref(&format!("{separator}{r}"));
         if let Some((start, end)) = self.point {
@@ -191,8 +196,8 @@ impl EditState {
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return false;
         }
-        let Some(signature) = crate::formula_locale::signature(&name, self.locale, language) else { return false };
-        let sep = self.locale.list_separator();
+        let Some(signature) = crate::formula_locale::signature(&name, self.locale, self.separators, language) else { return false };
+        let sep = self.separators.list;
         let inner = signature.split_once('(').map(|(_, rest)| rest.trim_end().trim_end_matches(')')).unwrap_or("");
         let args: Vec<&str> = inner.split(sep).map(|a| a.trim().trim_start_matches('[').trim_end_matches(']')).filter(|a| !a.is_empty()).collect();
         let close = if open && after.starts_with(')') { "" } else { ")" };
@@ -240,7 +245,7 @@ impl EditState {
                     }
                     depth -= 1;
                 }
-                c if c == self.locale.list_separator() && depth == 0 => arg += 1,
+                c if c == self.separators.list && depth == 0 => arg += 1,
                 _ => {}
             }
         }
@@ -254,11 +259,16 @@ fn is_name_char(c: char) -> bool {
 }
 
 /// References in formula text with their byte spans and colour index (same reference text ⇒
-/// same colour), for colouring the editor and outlining ranges on the grid.
-pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
+/// same colour), for colouring the editor and outlining ranges on the grid. `text` is in the
+/// edit's syntax (`{1\2}` with a Portuguese region).
+pub fn formula_refs(
+    text: &str,
+    locale: gridcraft_engine::formula::FormulaLocale,
+    separators: gridcraft_engine::formula::Separators,
+) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
     let body = text.strip_prefix('=').or_else(|| text.strip_prefix('+')).unwrap_or(text);
     let offset = text.len() - body.len();
-    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
+    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize_locale(body, locale, separators) else { return vec![] };
     let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     let mut i = 0;
@@ -410,12 +420,17 @@ mod tests {
         assert_eq!(e.text, "=ZÄHLENWENN(");
         let mut e = EditState::new(0, CellRef::new(0, 0), "=SI(A1>0;año(B1;".into(), true, false);
         e.locale = gridcraft_engine::formula::FormulaLocale::Es;
+        e.separators = gridcraft_engine::formula::Separators::new(e.locale, gridcraft_engine::core::region::lookup("es-ES"));
         assert_eq!(e.current_function(), Some(("AÑO".into(), 1)));
+        let mut e = EditState::new(0, CellRef::new(0, 0), "=ЕСЛИ(A1>0;сумм(B1;".into(), true, false);
+        e.locale = gridcraft_engine::formula::FormulaLocale::Ru;
+        e.separators = gridcraft_engine::formula::Separators::new(e.locale, gridcraft_engine::core::region::lookup("ru-RU"));
+        assert_eq!(e.current_function(), Some(("СУММ".into(), 1)));
     }
 
     #[test]
     fn ref_spans() {
-        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4");
+        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4", Default::default(), Default::default());
         assert_eq!(r.len(), 4);
         assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
         assert_eq!(r[1].2.a1(), "B2:C3");
@@ -434,7 +449,7 @@ mod tests {
 
     #[test]
     fn whole_row_and_column_ref_spans() {
-        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
+        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)", Default::default(), Default::default());
         assert_eq!(refs.len(), 4);
         assert_eq!(refs[0].2.a1(), "C:C");
         assert_eq!(refs[1].2.a1(), "4:6");
@@ -449,7 +464,7 @@ mod tests {
         edit.insert_ref("C:C");
         edit.append_ref("E:E");
         assert_eq!(edit.text, "=SUM(C:C,E:E");
-        assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
+        assert_eq!(formula_refs(&edit.text, edit.locale, edit.separators).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
         assert_eq!(edit.point, Some((9, 12)));
         assert!(edit.can_point());
     }

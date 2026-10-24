@@ -1781,7 +1781,7 @@ pub(crate) fn paint_selection(
         && ed.is_formula()
     {
         let origin = app.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map_or(sh.name.as_str(), |o| o.name.as_str());
-        for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text) {
+        for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text, ed.locale, ed.separators) {
             if !crate::editor::ref_is_on_sheet(sheet.as_deref(), origin, &sh.name) {
                 continue;
             }
@@ -2691,7 +2691,9 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     let active_sheet = wb.active_sheet;
     let range = if extend {
         ed.point
-            .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
+            .and_then(|point| {
+                crate::editor::formula_refs(&ed.text, ed.locale, ed.separators).into_iter().find(|(start, end, ..)| (*start, *end) == point)
+            })
             .and_then(|(_, _, previous, previous_sheet, _)| {
                 let previous_sheet = previous_sheet.as_deref().map(|name| wb.sheet_index(name)).unwrap_or(Some(edit_sheet));
                 if previous_sheet != Some(active_sheet) {

@@ -1,5 +1,6 @@
 //! Deutsch (Deutschland): the formula words German Excel shows (function names, booleans, errors,
-//! structured-reference specifiers) and its formula separators.
+//! structured-reference specifiers) and its array-constant separators. The list and decimal
+//! separators come from the region.
 //!
 //! Function names come from Microsoft Support's de-de Excel function pages (retrieved
 //! 2026-10-10; the pages are machine-translated): per page, a vote among the title, the meta
@@ -16,13 +17,12 @@
 //!   Observed: German Excel screenshot with an empty =FILTER(…) and =TEILERGEBNIS(9;…) showing #KALK! (https://www.excel-nervt.de/der-moment-wenn-dir-klar-wird-das-ist-kein-muskelkater-das-ist-verschleiss/, 2023);
 //!   a user's empty =SUMME(FILTER(…;…)) showing #KALK (https://www.herber.de/forum/archiv/1952to1956/1955262_KALK.html, 2023).
 //!   Disputed: #1201 and a German Excel user on #1522 report #CALC! in current Excel 365.
+//! - array columns: https://www.hermann-baum.de/excel/tutorial/matrixformeln/ ({20.40.70; 10.30.0}, "durch einen Punkt getrennt") | https://openbook.rheinwerk-verlag.de/excel_2007/excel2007_04_005.htm ({23.26.65;16.10.45})
 
 use super::Dialect;
 use gridcraft_core::CellError;
 
 pub(super) const DIALECT: Dialect = Dialect {
-    list: ';',
-    decimal: ',',
     array_column: '.',
     array_row: ';',
     bool_true: "WAHR",

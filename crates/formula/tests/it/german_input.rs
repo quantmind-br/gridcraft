@@ -1,13 +1,17 @@
-//! German formulas: entry and display syntax.
+//! German formulas: entry and display syntax, with the separators of a German region.
 use gridcraft_formula::FormulaLocale::{self, De};
-use gridcraft_formula::{parse, parse_input, print, print_input};
+use gridcraft_formula::{Separators, parse, parse_input, print, print_input};
+
+fn de_de() -> Separators {
+    Separators::new(De, gridcraft_core::region::lookup("de-DE"))
+}
 
 fn canonical(src: &str, locale: FormulaLocale) -> String {
-    print(&parse_input(src, locale, |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
+    print(&parse_input(src, locale, de_de(), |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
 }
 
 fn shown(canonical: &str, locale: FormulaLocale) -> String {
-    print_input(&parse(canonical).unwrap(), locale, |_| false).unwrap()
+    print_input(&parse(canonical).unwrap(), locale, de_de(), |_| false).unwrap()
 }
 
 #[test]
@@ -32,11 +36,11 @@ fn english_names_any_letter_case_and_local_bindings() {
     assert_eq!(canonical("LET(zählenwenn;LAMBDA(x;x*2);ZÄHLENWENN(3))", De), "LET(zählenwenn,LAMBDA(x,x*2),ZÄHLENWENN(3))");
     assert_eq!(canonical("NACHZEILE(A1:B3;SUMME)", De), "BYROW(A1:B3,SUM)");
     let known = |name: &str| name == "SUMME";
-    assert_eq!(print(&parse_input("NACHZEILE(A1:B3;SUMME)", De, known).unwrap()), "BYROW(A1:B3,SUMME)");
-    assert_eq!(print_input(&parse("BYROW(A1:B3,SUM)").unwrap(), De, known).unwrap(), "NACHZEILE(A1:B3;SUM)");
+    assert_eq!(print(&parse_input("NACHZEILE(A1:B3;SUMME)", De, de_de(), known).unwrap()), "BYROW(A1:B3,SUMME)");
+    assert_eq!(print_input(&parse("BYROW(A1:B3,SUM)").unwrap(), De, de_de(), known).unwrap(), "NACHZEILE(A1:B3;SUM)");
     // English separators are not German syntax.
-    assert!(parse_input("SUMME(1.5;2)", De, |_| false).is_err());
+    assert!(parse_input("SUMME(1.5;2)", De, de_de(), |_| false).is_err());
     for bad in ["SUMME({1.}", "Tabelle1[[#Kopfzeilen];", "#WERT"] {
-        assert!(parse_input(bad, De, |_| false).is_err(), "{bad}");
+        assert!(parse_input(bad, De, de_de(), |_| false).is_err(), "{bad}");
     }
 }

@@ -974,6 +974,7 @@ impl SheetApp {
         let mut ed = editor::EditState::new(d.wb.active_sheet, at, text, replace, from_formula_bar);
         ed.locale = locale;
         ed.region = self.session.region();
+        ed.separators = gridcraft_engine::formula::Separators::new(locale, ed.region);
         if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
