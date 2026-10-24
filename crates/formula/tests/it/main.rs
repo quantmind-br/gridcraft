@@ -1,5 +1,6 @@
 //! The crate's integration tests, one module per file, built as one test binary.
 
+mod french_input;
 mod german_input;
 mod localized_input;
 mod portuguese_input;

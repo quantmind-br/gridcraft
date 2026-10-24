@@ -194,12 +194,12 @@ impl Language {
             Self::De => FormulaLocale::De,
             Self::PtBr => FormulaLocale::PtBr,
             Self::Ru => FormulaLocale::Ru,
+            Self::Fr => FormulaLocale::Fr,
             Self::En
             | Self::El
             | Self::Zh
             | Self::Ja
             | Self::Ko
-            | Self::Fr
             | Self::Cs
             | Self::Sr
             | Self::Tr
