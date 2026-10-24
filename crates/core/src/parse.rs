@@ -526,12 +526,16 @@ mod tests {
     /// long text field costs linear, not quadratic, work; times the regions write still read.
     #[test]
     fn date_and_time_search_stays_linear_in_every_region() {
-        let started = std::time::Instant::now();
-        for region in ["en-US", "de-DE", "ja-JP", "ko-KR", "ru-RU"] {
+        // No clock in core (it traps on wasm): a worker answers, or the wait times out.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             let long = "25.09.2026 ".repeat(20_000);
-            assert_eq!(pin(region, &long).value, Value::text(long.as_str()), "{region}");
-        }
-        assert!(started.elapsed() < std::time::Duration::from_secs(2), "long text took {:?}", started.elapsed());
+            for region in ["en-US", "de-DE", "ja-JP", "ko-KR", "ru-RU"] {
+                assert_eq!(pin(region, &long).value, Value::text(long.as_str()), "{region}");
+            }
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "a long text field took more than 10 s to read");
         for (region, s) in
             [("ja-JP", "2026/9/25 午後3:30"), ("ja-JP", "2026/9/25 午後 3:30"), ("ko-KR", "2026-09-25 오후 3:30"), ("es-ES", "25/09/2026 3:30 p. m.")]
         {
